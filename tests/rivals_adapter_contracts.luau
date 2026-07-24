@@ -338,6 +338,38 @@ assert(
     "Zero Camera Aim smoothness must preserve instant rotation"
 )
 
+assert(
+    type(Rivals.humanRotation) == "function",
+    "Human Aim must provide motion-responsive curved tracking"
+)
+local humanAimState = { curveSign = 1 }
+local humanStartTarget = Vector2.new(0, 0.35)
+local humanStart = Rivals.humanRotation(
+    Vector2.zero,
+    humanStartTarget,
+    70,
+    1 / 60,
+    humanAimState
+)
+local fastHumanTarget = Vector2.new(0, 0.5)
+local fixedSpeedFollow = Rivals.smoothRotation(humanStart, fastHumanTarget, 70, 1 / 60)
+local adaptiveFollow = Rivals.humanRotation(
+    humanStart,
+    fastHumanTarget,
+    70,
+    1 / 60,
+    humanAimState
+)
+assert(
+    (fastHumanTarget - adaptiveFollow).Magnitude < (fastHumanTarget - fixedSpeedFollow).Magnitude,
+    "Human Aim must accelerate to reduce trailing error when the target moves quickly"
+)
+assert(adaptiveFollow ~= fastHumanTarget, "Human Aim must not snap perfectly onto a moving target")
+assert(
+    math.abs(adaptiveFollow.X) > 0 and math.abs(adaptiveFollow.X) <= math.rad(0.5),
+    "Human Aim must follow a subtle curved path that remains close to the target"
+)
+
 local knifeTargetRoot = {
     CFrame = CFrame.lookAt(Vector3.new(5, 0, 0), Vector3.new(6, 0, 0)),
     Position = Vector3.new(5, 0, 0),
@@ -565,6 +597,13 @@ local observations = {
         visible = true,
     },
 }
+local farObservation = {
+    character = character(150),
+    player = enemyPlayer,
+    position = origin + Vector3.new(2001, 0, 0),
+    screenDistance = 1,
+    visible = true,
+}
 local rangeObservation = {
     character = rangeTarget,
     position = targetPosition,
@@ -587,7 +626,7 @@ local targeting = {
     observePlayers = function(options)
         assert(options.isEligible(enemyPlayer, target.character) == true)
         assert(options.screenOrigin == mousePosition)
-        return observations
+        return { farObservation, table.unpack(observations) }
     end,
     observeCharacter = function(value, options)
         assert(value == rangeTarget, "Non-humanoid Target markers must never reach ESP observation")
@@ -717,7 +756,14 @@ local adapter = Rivals.new({
 assert(renderCallback, "RIVALS adapter must attach a resilient per-frame loop")
 renderCallback()
 assert(rendered.observations == state.observations and rendered.position == mousePosition)
-assert(#rendered.observations == 2 and rendered.observations[2] == rangeObservation)
+assert(
+    #rendered.observations == 2 and rendered.observations[2] == rangeObservation,
+    "RIVALS observation pipeline must keep only the near player and range dummy"
+)
+assert(
+    table.find(rendered.observations, farObservation) == nil,
+    "RIVALS ESP and aim must exclude observations beyond 2,000 studs"
+)
 assert(state.activeWeapon == "Burst Rifle")
 assert(state.status == "Shooting range · 2 dummies · 2 visible")
 assert(observations[1].health == 150 and observations[1].maxHealth == 150)
@@ -726,9 +772,9 @@ assert(rangeObservation.player == rangeTarget)
 assert(rangeObservation.health == 150 and rangeObservation.maxHealth == 150)
 assert(
     rotationCalls == 1
-        and cameraModule.Rotation ~= Vector2.zero
+        and cameraModule.Rotation == Rivals.rotationToward(origin, targetPosition)
         and nearestOptions[1].maxScreenDistance == 180,
-    "Camera Aim must use the configured FOV and the game's public camera rotation seam"
+    "Camera Aim must ignore a closer-to-crosshair target beyond the ESP distance cap"
 )
 assert(clicks == 0, "Camera Aim must not fire unless Trigger Bot is enabled")
 
@@ -790,6 +836,26 @@ assert(
 )
 settings.missRate = 0
 
+settings.humanAim = true
+settings.aimSmoothness = 70
+cameraModule.Rotation = Vector2.zero
+currentTime += 1
+renderCallback(1 / 60)
+local humanHeadStart = cameraModule.Rotation
+runtimeAimHead.Position += Vector3.new(8, 0, 0)
+local movedHeadRotation = Rivals.rotationToward(origin, runtimeAimHead.Position)
+local fixedHeadFollow = Rivals.smoothRotation(humanHeadStart, movedHeadRotation, 70, 1 / 60)
+currentTime += 1 / 60
+renderCallback(1 / 60)
+assert(
+    (movedHeadRotation - cameraModule.Rotation).Magnitude
+        < (movedHeadRotation - fixedHeadFollow).Magnitude,
+    "Human Aim must refresh the moving head position and speed up enough to keep it relatively tracked"
+)
+assert(cameraModule.Rotation ~= movedHeadRotation, "Human Aim must stay imperfect instead of hard-locking the head")
+settings.humanAim = false
+runtimeAimHead.Position = targetPosition + Vector3.new(0, 2, 0)
+
 local clicksBeforeSmoothAim = clicks
 settings.aimSmoothness = 100
 settings.triggerBot = true
@@ -823,10 +889,25 @@ assert(
     rotationCalls == duelRotationCalls + 1,
     "An alive local camera subject must remain active when RIVALS reports IsSpectating during a duel"
 )
-fighterModule.LocalFighter.Data.IsInShootingRange = true
 
 settings.silentAim = false
 settings.triggerBot = true
+fighterModule.LocalFighter.Data.IsInDuel = false
+target.screenDistance = 4
+observations[1].screenDistance = 4
+rangeObservation.screenDistance = 4
+local lobbyClicks = clicks
+renderCallback()
+assert(
+    clicks == lobbyClicks,
+    "Trigger Bot must not target players outside a match or the shooting range"
+)
+
+fighterModule.LocalFighter.Data.IsInDuel = true
+fighterModule.LocalFighter.Data.IsInShootingRange = true
+target.screenDistance = 40
+observations[1].screenDistance = 40
+rangeObservation.screenDistance = 40
 renderCallback()
 assert(clicks == 0, "Trigger Bot must not fire at an enemy outside the crosshair radius")
 assert(nearestOptions[#nearestOptions].maxScreenDistance == 8)

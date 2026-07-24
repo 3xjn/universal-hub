@@ -27,6 +27,7 @@ local Rivals = {
 
 local TRIGGER_INTERVAL = 0.1
 local TRIGGER_RADIUS = 8
+local MAX_OBSERVATION_DISTANCE = 2000
 local RICOCHET_BOUNCES = 2
 local RICOCHET_CACHE_INTERVAL = 0.15
 local RICOCHET_MAX_DISTANCE = 2048
@@ -196,6 +197,44 @@ function Rivals.smoothRotation(current, target, smoothness, deltaTime)
         current.X + (target.X - current.X) * alpha,
         current.Y + yawDelta * alpha
     )
+end
+
+function Rivals.humanRotation(current, target, smoothness, deltaTime, state)
+    if not current then
+        return target
+    end
+
+    state = state or {}
+    local stepTime = math.max(deltaTime or 1 / 60, 1 / 240)
+    local smooth = math.clamp(smoothness or 0, 0, 100)
+    local yawError = (target.Y - current.Y + math.pi) % (math.pi * 2) - math.pi
+    local error = Vector2.new(target.X - current.X, yawError)
+    local targetMotion = Vector2.zero
+    if state.lastTarget then
+        targetMotion = Vector2.new(
+            target.X - state.lastTarget.X,
+            (target.Y - state.lastTarget.Y + math.pi) % (math.pi * 2) - math.pi
+        )
+    end
+    state.lastTarget = target
+
+    local targetSpeed = targetMotion.Magnitude / stepTime
+    local baseSpeed = math.max(1.5, 30 * (1 - smooth / 100))
+    local trackingSpeed = baseSpeed + math.min(targetSpeed * 0.8, 24)
+    local alpha = 1 - math.exp(-trackingSpeed * stepTime)
+    local curve = Vector2.zero
+    if error.Magnitude > 1e-6 then
+        local curveMagnitude = math.min(error.Magnitude * 0.08, math.rad(0.35))
+        local curveSign = state.curveSign or 1
+        curve = Vector2.new(-error.Y, error.X).Unit * curveMagnitude * curveSign
+    end
+
+    local step = error * alpha + targetMotion * 0.55 + curve * alpha
+    local maximumStep = error.Magnitude * 0.85
+    if step.Magnitude > maximumStep and maximumStep > 0 then
+        step = step.Unit * maximumStep
+    end
+    return current + step
 end
 
 function Rivals.reflectDirection(direction, normal)
@@ -747,6 +786,8 @@ function Rivals.new(context)
     local splashCache
     local slingshotCache
     local aimPlan
+    local humanAimCharacter
+    local humanAimState
     local renderDelta = 1 / 60
     local observations = {}
     local self = {}
@@ -780,6 +821,13 @@ function Rivals.new(context)
             and CameraController._current_subject == fighter
             and humanoid ~= nil
             and humanoid.Health > 0
+    end
+
+    local function localFighterIsInCombat()
+        local fighter = FighterController.LocalFighter
+        local data = fighter and fighter.Data
+        return type(data) == "table"
+            and (data.IsInShootingRange == true or data.IsInDuel == true)
     end
 
     local function isOpponent(player, character)
@@ -838,20 +886,53 @@ function Rivals.new(context)
             and aimPlan.item == item
             and now < aimPlan.expiresAt
         then
-            return aimPlan.target
+            local refreshed = table.clone(target)
+            refreshed.intentionalMiss = aimPlan.target.intentionalMiss
+            refreshed.part = aimPlan.target.part
+            if refreshed.intentionalMiss then
+                local character = target.character
+                local root = character
+                    and character.FindFirstChild
+                    and character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    local width = root.Size and root.Size.X or 2
+                    refreshed.part = root
+                    refreshed.position = target.position
+                        + root.CFrame.RightVector * (width * 0.5 + 2.5)
+                end
+            elseif refreshed.part and refreshed.part.Name == "Head" then
+                local character = target.character
+                local head = character and character.FindFirstChild and character:FindFirstChild("Head")
+                if head then
+                    refreshed.part = head
+                    refreshed.position = head.Position
+                end
+            end
+            return refreshed
         end
 
+        local settings = store:Get().settings
         local info = item and item.Info
         local cooldown = type(info) == "table"
                 and (info.ShootCooldown or info.AttackCooldown or info.ChargeReleaseCooldown)
             or TRIGGER_INTERVAL
+        local planned = Rivals.applyAimRates(target, settings, random)
+        if settings.humanAim and planned and not planned.intentionalMiss then
+            local character = target.character
+            local head = character and character.FindFirstChild and character:FindFirstChild("Head")
+            if head then
+                planned = table.clone(planned)
+                planned.part = head
+                planned.position = head.Position
+            end
+        end
         aimPlan = {
             character = target.character,
             expiresAt = now + math.max(TRIGGER_INTERVAL, cooldown or TRIGGER_INTERVAL),
             item = item,
-            target = Rivals.applyAimRates(target, store:Get().settings, random),
+            target = planned,
         }
-        return aimPlan.target
+        return planned
     end
 
     local function ricochetRaycast()
@@ -953,6 +1034,21 @@ function Rivals.new(context)
             end
         end
 
+        local cameraFrame = camera
+            and (camera.GetRenderCFrame and camera:GetRenderCFrame() or camera.CFrame)
+        local cameraPosition = cameraFrame and cameraFrame.Position
+        local nearby = {}
+        if cameraPosition then
+            for _, observation in ipairs(observations) do
+                if observation.position
+                    and (observation.position - cameraPosition).Magnitude <= MAX_OBSERVATION_DISTANCE
+                then
+                    table.insert(nearby, observation)
+                end
+            end
+        end
+        observations = nearby
+
         local visibleCount = 0
         for _, observation in ipairs(observations) do
             if observation.player ~= observation.character then
@@ -985,7 +1081,7 @@ function Rivals.new(context)
         return ("%s · %d enemies · %d visible"):format(phase, enemyCount, visibleCount)
     end
 
-    local function setAimRotation(rotation, instant)
+    local function setAimRotation(rotation, instant, character)
         local applied = rotation
         if instant then
             CameraController:SetRotation(rotation)
@@ -995,13 +1091,29 @@ function Rivals.new(context)
         local smoothness = settings.aimSmoothness
         if settings.humanAim then
             smoothness = math.max(smoothness, 55)
+            if humanAimCharacter ~= character then
+                humanAimCharacter = character
+                humanAimState = {
+                    curveSign = random() < 0.5 and -1 or 1,
+                }
+            end
+            applied = Rivals.humanRotation(
+                CameraController.Rotation,
+                rotation,
+                smoothness,
+                renderDelta,
+                humanAimState
+            )
+        else
+            humanAimCharacter = nil
+            humanAimState = nil
+            applied = Rivals.smoothRotation(
+                CameraController.Rotation,
+                rotation,
+                smoothness,
+                renderDelta
+            )
         end
-        applied = Rivals.smoothRotation(
-            CameraController.Rotation,
-            rotation,
-            smoothness,
-            renderDelta
-        )
         CameraController:SetRotation(applied)
         local pitchError = math.abs(rotation.X - applied.X)
         local yawError = math.abs((rotation.Y - applied.Y + math.pi) % (math.pi * 2) - math.pi)
@@ -1041,7 +1153,11 @@ function Rivals.new(context)
         local origin = cameraFrame.Position
         local now = clock()
         if knife then
-            local aimSettled = setAimRotation(Rivals.rotationToward(origin, target.position), true)
+            local aimSettled = setAimRotation(
+                Rivals.rotationToward(origin, target.position),
+                true,
+                target.character
+            )
             local aligned = {}
             for key, value in pairs(target) do
                 aligned[key] = value
@@ -1076,7 +1192,9 @@ function Rivals.new(context)
 
             if slingshotCache.solution then
                 local aimSettled = setAimRotation(
-                    Rivals.rotationToward(origin, origin + slingshotCache.solution.direction)
+                    Rivals.rotationToward(origin, origin + slingshotCache.solution.direction),
+                    false,
+                    target.character
                 )
                 local aligned = {}
                 for key, value in pairs(target) do
@@ -1117,7 +1235,9 @@ function Rivals.new(context)
 
             if splashCache.solution then
                 local aimSettled = setAimRotation(
-                    Rivals.rotationToward(origin, origin + splashCache.solution.direction)
+                    Rivals.rotationToward(origin, origin + splashCache.solution.direction),
+                    false,
+                    target.character
                 )
                 local aligned = {}
                 for key, value in pairs(target) do
@@ -1139,7 +1259,9 @@ function Rivals.new(context)
             local solution = Rivals.solveProjectileAim(origin, target, item.Info, Workspace.Gravity)
             if solution then
                 local aimSettled = setAimRotation(
-                    Rivals.rotationToward(origin, origin + solution.direction)
+                    Rivals.rotationToward(origin, origin + solution.direction),
+                    false,
+                    target.character
                 )
                 local aligned = {}
                 for key, value in pairs(target) do
@@ -1153,7 +1275,11 @@ function Rivals.new(context)
         end
 
         if target.visible then
-            local aimSettled = setAimRotation(Rivals.rotationToward(origin, target.position))
+            local aimSettled = setAimRotation(
+                Rivals.rotationToward(origin, target.position),
+                false,
+                target.character
+            )
             ricochetCache = nil
             local aligned = table.clone(target)
             aligned.aimSettled = aimSettled
@@ -1183,7 +1309,11 @@ function Rivals.new(context)
             return nil
         end
 
-        local aimSettled = setAimRotation(Rivals.rotationToward(origin, origin + solution.direction))
+        local aimSettled = setAimRotation(
+            Rivals.rotationToward(origin, origin + solution.direction),
+            false,
+            target.character
+        )
         local aligned = {}
         for key, value in pairs(target) do
             aligned[key] = value
@@ -1199,6 +1329,7 @@ function Rivals.new(context)
         if not settings.triggerBot
             or context.isInputCaptured()
             or not localFighterIsActive()
+            or not localFighterIsInCombat()
         then
             if triggerHeld then
                 context.aimRelease()
