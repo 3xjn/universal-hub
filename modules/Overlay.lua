@@ -29,9 +29,10 @@ local OPTION_GROUPS = {
         id = "visuals",
         label = "VISUALS",
         rows = {
-            { "boxes", "names" },
-            { "health", "weapon" },
-            { "noFlash", "noSmoke" },
+            { "boxes", "chams" },
+            { "names", "health" },
+            { "weapon", "noFlash" },
+            { "noSmoke" },
         },
     },
 }
@@ -50,6 +51,7 @@ local OPTION_LABELS = {
     spinBot = "Spin Bot",
     wallbang = "Wallbang",
     boxes = "Hitboxes",
+    chams = "Chams",
     names = "Names",
     health = "Health",
     weapon = "Weapons",
@@ -96,12 +98,35 @@ function Overlay.new(context)
     assert(context and context.drawing, "Hub overlay requires Hydroxide drawing helpers")
     assert(context.store, "Hub overlay requires a reactive store")
 
+    local optionAvailable = {}
+    if type(context.capabilities) == "table" then
+        for optionName in pairs(OPTION_LABELS) do
+            optionAvailable[optionName] = false
+        end
+        for key, value in pairs(context.capabilities) do
+            local optionName = type(key) == "number" and value or key
+            if value ~= false then
+                optionAvailable[optionName] = true
+            end
+        end
+    else
+        for optionName in pairs(OPTION_LABELS) do
+            optionAvailable[optionName] = true
+        end
+    end
+    local optionSupport = {
+        chams = type(context.drawing.supports) ~= "function" or context.drawing.supports("Quad"),
+    }
     local self = setmetatable({
         captured = false,
+        cosmeticsSupported = context.cosmetics ~= false,
         context = context,
         controls = {},
         destroyed = false,
         observations = {},
+        optionAvailable = optionAvailable,
+        optionSupport = optionSupport,
+        optionLabels = context.optionLabels or {},
         playerNodes = {},
         surface = context.drawing.createSurface({
             acceptProcessedInput = true,
@@ -134,7 +159,7 @@ function Overlay:_build()
     controls.panel = self:_capture(surface:create("Square", {
         Color = COLORS.panel,
         Filled = true,
-        Size = Vector2.new(300, 562),
+        Size = Vector2.new(300, 596),
         Transparency = 0.97,
         Visible = true,
         ZIndex = 200,
@@ -142,7 +167,7 @@ function Overlay:_build()
     controls.title = self:_text({
         Color = COLORS.text,
         Size = 16,
-        Text = "Universal Hub · Counterblox",
+        Text = "Universal Hub · " .. (self.context.gameLabel or "Universal"),
         ZIndex = 202,
     })
     controls.hideButton = self:_capture(surface:create("Square", {
@@ -248,23 +273,32 @@ function Overlay:_build()
     controls.sections = {}
     controls.options = {}
     for _, group in ipairs(OPTION_GROUPS) do
-        controls.sections[group.id] = {
-            label = self:_text({
-                Color = COLORS.accent,
-                Size = 11,
-                Text = group.label,
-                ZIndex = 203,
-            }),
-            line = surface:create("Square", {
-                Color = COLORS.border,
-                Filled = true,
-                Size = Vector2.new(218, 1),
-                Visible = true,
-                ZIndex = 202,
-            }, { pointerEvents = false }),
-        }
+        local hasAvailableOption = false
         for _, optionRow in ipairs(group.rows) do
             for _, optionName in ipairs(optionRow) do
+                hasAvailableOption = hasAvailableOption or self.optionAvailable[optionName] == true
+            end
+        end
+        if hasAvailableOption then
+            controls.sections[group.id] = {
+                label = self:_text({
+                    Color = COLORS.accent,
+                    Size = 11,
+                    Text = group.label,
+                    ZIndex = 203,
+                }),
+                line = surface:create("Square", {
+                    Color = COLORS.border,
+                    Filled = true,
+                    Size = Vector2.new(218, 1),
+                    Visible = true,
+                    ZIndex = 202,
+                }, { pointerEvents = false }),
+            }
+        end
+        for _, optionRow in ipairs(group.rows) do
+            for _, optionName in ipairs(optionRow) do
+                if self.optionAvailable[optionName] then
         local parent = OPTION_PARENTS[optionName]
         local row = self:_capture(surface:create("Square", {
             Color = COLORS.elevated,
@@ -276,7 +310,7 @@ function Overlay:_build()
         local label = self:_text({
             Color = COLORS.text,
             Size = 13,
-            Text = OPTION_LABELS[optionName],
+            Text = self.optionLabels[optionName] or OPTION_LABELS[optionName],
             ZIndex = 203,
         })
         local value = self:_text({
@@ -297,6 +331,9 @@ function Overlay:_build()
             }, { pointerEvents = false })
         end
         row:on("click", function()
+            if self.optionSupport[optionName] == false then
+                return
+            end
             local state = self.context.store:Get()
             self.context.setOption(optionName, not state.settings[optionName])
         end)
@@ -306,6 +343,7 @@ function Overlay:_build()
             marker = marker,
             value = value,
         }
+                end
             end
         end
     end
@@ -669,13 +707,17 @@ function Overlay:_layout()
     local sectionY = y + 138
     for _, group in ipairs(OPTION_GROUPS) do
         local section = controls.sections[group.id]
+        if section then
         section.label.Position = Vector2.new(x + 12, sectionY)
         section.line.Position = Vector2.new(x + 70, sectionY + 7)
         sectionY = sectionY + 20
         for _, optionRow in ipairs(group.rows) do
-            for column, optionName in ipairs(optionRow) do
-                local rowX = x + 12 + (column - 1) * 142
+            local column = 0
+            for _, optionName in ipairs(optionRow) do
                 local option = controls.options[optionName]
+                if option then
+                column = column + 1
+                local rowX = x + 12 + (column - 1) * 142
                 option.row.Position = Vector2.new(rowX, sectionY)
                 if option.marker then
                     option.marker.Position = Vector2.new(rowX + 8, sectionY + 8)
@@ -683,12 +725,17 @@ function Overlay:_layout()
                 option.label.Position =
                     Vector2.new(rowX + (option.marker and 15 or 9), sectionY + 8)
                 option.value.Position = Vector2.new(rowX + 112, sectionY + 8)
+                end
             end
-            sectionY = sectionY + 34
+            if column > 0 then
+                sectionY = sectionY + 34
+            end
         end
         sectionY = sectionY + 6
+        end
     end
 
+    self.optionsPanelHeight = sectionY - y + 12
     local cosmetics = controls.cosmetics
     cosmetics.header.Position = Vector2.new(x + 12, sectionY)
     cosmetics.headerLabel.Position = Vector2.new(x + 22, sectionY + 9)
@@ -752,17 +799,21 @@ function Overlay:_setMenuVisible(visible)
     for _, section in pairs(controls.sections) do
         setVisible(section, visible)
     end
-    controls.cosmetics.header.Visible = visible
-    controls.cosmetics.headerLabel.Visible = visible
-    controls.cosmetics.indicator.Visible = visible
+    local cosmeticsVisible = visible and self.cosmeticsSupported
+    controls.cosmetics.header.Visible = cosmeticsVisible
+    controls.cosmetics.headerLabel.Visible = cosmeticsVisible
+    controls.cosmetics.indicator.Visible = cosmeticsVisible
     for name, node in pairs(controls.cosmetics) do
         if name ~= "header" and name ~= "headerLabel" and name ~= "indicator" then
             if name == "colorChannels" then
                 for _, channel in pairs(node) do
-                    setVisible(channel, visible and self.cosmeticsOpen == true and self.gloveColorVisible == true)
+                    setVisible(
+                        channel,
+                        cosmeticsVisible and self.cosmeticsOpen == true and self.gloveColorVisible == true
+                    )
                 end
             else
-                node.Visible = visible and self.cosmeticsOpen == true
+                node.Visible = cosmeticsVisible and self.cosmeticsOpen == true
             end
         end
     end
@@ -792,14 +843,16 @@ function Overlay:_renderState(state)
     for optionName, option in pairs(controls.options) do
         local enabled = settings[optionName] == true
         local parent = OPTION_PARENTS[optionName]
-        local available = not parent or settings[parent] == true
+        local supported = self.optionSupport[optionName] ~= false
+        local available = supported and (not parent or settings[parent] == true)
         option.row.Color = available and (enabled and COLORS.accentSurface or COLORS.elevated) or COLORS.panel
         option.label.Color = available and COLORS.text or COLORS.secondary
         if option.marker then
             option.marker.Color = available and COLORS.accent or COLORS.border
         end
         option.value.Color = available and enabled and COLORS.accent or COLORS.secondary
-        option.value.Text = not available and enabled and "Standby" or (enabled and "On" or "Off")
+        option.value.Text = not supported and "N/A"
+            or (not available and enabled and "Standby" or (enabled and "On" or "Off"))
     end
 
     local alpha = (settings.fov - settings.minimumFov) / (settings.maximumFov - settings.minimumFov)
@@ -817,10 +870,9 @@ function Overlay:_renderState(state)
     local cosmeticMode = state.cosmeticMode == "gloves" and "gloves" or "weapon"
     local gloveColor = settings.gloveColorOverride
     self.gloveColorVisible = cosmeticMode == "gloves" and type(gloveColor) == "table"
-    controls.panel.Size = Vector2.new(
-        300,
-        self.cosmeticsOpen and (self.gloveColorVisible and 764 or 690) or 562
-    )
+    controls.panel.Size = Vector2.new(300, if self.cosmeticsSupported
+        then (self.cosmeticsOpen and (self.gloveColorVisible and 798 or 724) or 596)
+        else (self.optionsPanelHeight or 596))
     local cosmetics = cosmeticMode == "gloves" and (state.gloves or {}) or (state.cosmetics or {})
     local cosmeticControls = controls.cosmetics
     local minimumWear = cosmetics.minimumWear or 0
@@ -920,18 +972,29 @@ end
 
 function Overlay:_syncBodyPartNodes(nodes, count)
     while #nodes.bodyParts < count do
-        local cube = { faces = {} }
-        for _faceIndex = 1, #BODY_CUBE_FACES do
-            table.insert(
-                cube.faces,
-                self.surface:create("Quad", {
-                    Color = COLORS.danger,
-                    Filled = true,
-                    Transparency = BODY_CUBE_OPACITY,
-                    Visible = false,
-                    ZIndex = 60,
-                }, { pointerEvents = false })
-            )
+        local cube = {
+            faces = {},
+            outline = self.surface:create("Square", {
+                Color = COLORS.danger,
+                Filled = false,
+                Thickness = 1.5,
+                Visible = false,
+                ZIndex = 61,
+            }, { pointerEvents = false }),
+        }
+        if self.optionSupport.chams ~= false then
+            for _faceIndex = 1, #BODY_CUBE_FACES do
+                table.insert(
+                    cube.faces,
+                    self.surface:create("Quad", {
+                        Color = COLORS.danger,
+                        Filled = true,
+                        Transparency = BODY_CUBE_OPACITY,
+                        Visible = false,
+                        ZIndex = 60,
+                    }, { pointerEvents = false })
+                )
+            end
         end
         table.insert(nodes.bodyParts, cube)
     end
@@ -964,21 +1027,32 @@ function Overlay:render(observations, mousePosition)
             for index, bodyPart in ipairs(bodyParts) do
                 local cube = nodes.bodyParts[index]
                 local corners = bodyPart.corners
-                local cubeVisible = settings.boxes == true
+                local partBounds = bodyPart.bounds
+                local outlineVisible = settings.boxes == true and type(partBounds) == "table"
+                local cubeVisible = settings.chams == true
+                    and self.optionSupport.chams ~= false
                     and type(corners) == "table"
                     and #corners == 8
                 local cubeColor = bodyPart.visible == true and COLORS.accent or COLORS.danger
 
+                if outlineVisible then
+                    cube.outline.Position = partBounds.position
+                    cube.outline.Size = partBounds.size
+                end
+                cube.outline.Color = cubeColor
+                cube.outline.Visible = outlineVisible
                 for faceIndex, cornerIndices in ipairs(BODY_CUBE_FACES) do
                     local face = cube.faces[faceIndex]
-                    if cubeVisible then
+                    if face and cubeVisible then
                         face.PointA = corners[cornerIndices[1]]
                         face.PointB = corners[cornerIndices[2]]
                         face.PointC = corners[cornerIndices[3]]
                         face.PointD = corners[cornerIndices[4]]
                     end
-                    face.Color = cubeColor
-                    face.Visible = cubeVisible
+                    if face then
+                        face.Color = cubeColor
+                        face.Visible = cubeVisible
+                    end
                 end
             end
 
@@ -1008,8 +1082,8 @@ function Overlay:render(observations, mousePosition)
                 bounds.position.X + bounds.size.X * 0.5,
                 bounds.position.Y + bounds.size.Y + 3
             )
-            nodes.weapon.Text = observation.weapon or "Unknown"
-            nodes.weapon.Visible = settings.weapon == true
+            nodes.weapon.Text = observation.weapon or ""
+            nodes.weapon.Visible = settings.weapon == true and observation.weapon ~= nil
         end
     end
 

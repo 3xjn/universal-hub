@@ -47,9 +47,11 @@ local Registry = import("modules/Registry")
 local Session = import("modules/Session")
 local Overlay = import("modules/Overlay")
 local Counterblox = import("games/Counterblox")
+local Rivals = import("games/Rivals")
 
 local registry = Registry.new()
 registry:Register(Counterblox)
+registry:Register(Rivals)
 
 local adapterDefinition = registry:Resolve({
     gameId = game.GameId,
@@ -63,6 +65,7 @@ assert(
 local defaultSettings = {
     bhop = false,
     boxes = true,
+    chams = true,
     fov = 180,
     fovCircle = true,
     fullScreenAim = false,
@@ -138,7 +141,7 @@ local store = Store.new({
         weapon = "Gloves",
     },
     settings = settings,
-    status = "Loading Counterblox",
+    status = ("Loading %s"):format(adapterDefinition.label),
 })
 environment.UniversalHubSettings = store:Get().settings
 
@@ -173,13 +176,17 @@ local function setThirdPerson(enabled)
 end
 
 overlay = Overlay.new({
+    capabilities = adapterDefinition.capabilities,
+    cosmetics = adapterDefinition.cosmetics,
     cycleGlove = function(direction)
         adapter:cycleGlove(direction)
     end,
     drawing = oh.drawing,
+    gameLabel = adapterDefinition.label,
     getCamera = function()
         return Workspace.CurrentCamera
     end,
+    optionLabels = adapterDefinition.optionLabels,
     setFov = function(value)
         session:setFov(value)
     end,
@@ -221,7 +228,11 @@ overlay = Overlay.new({
 })
 
 local created, result = pcall(adapterDefinition.new, {
+    aimPress = mouse2press,
+    aimRelease = mouse2release,
     click = mouse1click,
+    press = mouse1press,
+    release = mouse1release,
     gcObjects = function()
         return getgc(true)
     end,
@@ -297,6 +308,7 @@ end)
 
 oh.Resources = oh.Resources or {}
 table.insert(oh.Resources, session)
-store:Patch({ status = "Counterblox ready" })
-print("[Universal Hub]", "Counterblox ready")
+local readyStatus = ("%s ready"):format(adapterDefinition.label)
+store:Patch({ status = readyStatus })
+print("[Universal Hub]", readyStatus)
 return session
