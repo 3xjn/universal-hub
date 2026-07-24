@@ -7,6 +7,7 @@ local OPTION_GROUPS = {
         label = "RAGE",
         rows = {
             { "silentAim", "wallbang" },
+            { "humanAim" },
             { "triggerBot", "noSpread" },
             { "noRecoil", "noWeaponSlow" },
         },
@@ -54,12 +55,20 @@ local OPTION_LABELS = {
     chams = "Chams",
     names = "Names",
     health = "Health",
+    humanAim = "Human Aim",
     weapon = "Weapons",
 }
 
 local OPTION_PARENTS = {
+    humanAim = "silentAim",
     microStep = "knifeAura",
     wallbang = "silentAim",
+}
+
+local RATE_CONTROLS = {
+    { id = "aimSmoothness", label = "Aim Smoothness" },
+    { id = "headshotRate", label = "Headshot Rate" },
+    { id = "missRate", label = "Miss Rate" },
 }
 
 local COLORS = {
@@ -117,6 +126,17 @@ function Overlay.new(context)
     local optionSupport = {
         chams = type(context.drawing.supports) ~= "function" or context.drawing.supports("Quad"),
     }
+    local rateAvailable = {}
+    for _, definition in ipairs(RATE_CONTROLS) do
+        rateAvailable[definition.id] = false
+        for key, value in pairs(context.capabilities or {}) do
+            local capability = type(key) == "number" and value or key
+            if capability == definition.id and value ~= false then
+                rateAvailable[definition.id] = true
+                break
+            end
+        end
+    end
     local self = setmetatable({
         captured = false,
         cosmeticsSupported = context.cosmetics ~= false,
@@ -127,6 +147,7 @@ function Overlay.new(context)
         optionAvailable = optionAvailable,
         optionSupport = optionSupport,
         optionLabels = context.optionLabels or {},
+        rateAvailable = rateAvailable,
         playerNodes = {},
         surface = context.drawing.createSurface({
             acceptProcessedInput = true,
@@ -164,6 +185,16 @@ function Overlay:_build()
         Visible = true,
         ZIndex = 200,
     }))
+    controls.panel:on("pointerdown", function(_node, point)
+        self.panelDragOffset = point - controls.panel.Position
+    end)
+    controls.panel:on("drag", function(_node, point)
+        if not self.panelDragOffset then
+            return
+        end
+        self.panelPosition = point - self.panelDragOffset
+        self:_layout()
+    end)
     controls.title = self:_text({
         Color = COLORS.text,
         Size = 16,
@@ -269,6 +300,67 @@ function Overlay:_build()
         Visible = true,
         ZIndex = 50,
     }, { pointerEvents = false })
+
+    controls.rates = {}
+    for _, definition in ipairs(RATE_CONTROLS) do
+        if self.rateAvailable[definition.id] then
+            local control = {
+                fill = surface:create("Square", {
+                    Color = COLORS.accent,
+                    Filled = true,
+                    Visible = true,
+                    ZIndex = 204,
+                }, { pointerEvents = false }),
+                hit = self:_capture(surface:create("Square", {
+                    Color = COLORS.panel,
+                    Filled = true,
+                    Size = Vector2.new(276, 24),
+                    Transparency = 0,
+                    Visible = true,
+                    ZIndex = 202,
+                })),
+                knob = surface:create("Circle", {
+                    Color = COLORS.text,
+                    Filled = true,
+                    NumSides = 32,
+                    Radius = 6,
+                    Visible = true,
+                    ZIndex = 205,
+                }, { pointerEvents = false }),
+                label = self:_text({
+                    Color = COLORS.text,
+                    Size = 13,
+                    Text = definition.label,
+                    ZIndex = 203,
+                }),
+                track = surface:create("Square", {
+                    Color = COLORS.border,
+                    Filled = true,
+                    Size = Vector2.new(276, 4),
+                    Visible = true,
+                    ZIndex = 203,
+                }, { pointerEvents = false }),
+                value = self:_text({
+                    Center = true,
+                    Color = COLORS.secondary,
+                    Size = 12,
+                    Text = "0%",
+                    ZIndex = 203,
+                }),
+            }
+            local function setRate(point)
+                local alpha = math.clamp((point.X - control.hit.Position.X) / 276, 0, 1)
+                self.context.setRate(definition.id, math.round(alpha * 100))
+            end
+            control.hit:on("pointerdown", function(_node, point)
+                setRate(point)
+            end)
+            control.hit:on("drag", function(_node, point)
+                setRate(point)
+            end)
+            controls.rates[definition.id] = control
+        end
+    end
 
     controls.sections = {}
     controls.options = {}
@@ -686,8 +778,14 @@ function Overlay:_layout()
     end
 
     local controls = self.controls
-    local x = math.max(20, camera.ViewportSize.X - 324)
-    local y = 20
+    local panelSize = controls.panel.Size
+    local defaultPosition = Vector2.new(math.max(20, camera.ViewportSize.X - 324), 20)
+    local requestedPosition = self.panelPosition or defaultPosition
+    local x = math.clamp(requestedPosition.X, 0, math.max(0, camera.ViewportSize.X - panelSize.X))
+    local y = math.clamp(requestedPosition.Y, 0, math.max(0, camera.ViewportSize.Y - panelSize.Y))
+    if self.panelPosition then
+        self.panelPosition = Vector2.new(x, y)
+    end
     controls.panel.Position = Vector2.new(x, y)
     controls.title.Position = Vector2.new(x + 12, y + 12)
     controls.hideButton.Position = Vector2.new(x + 230, y + 7)
@@ -705,6 +803,17 @@ function Overlay:_layout()
     controls.sliderFill.Position = controls.sliderTrack.Position
 
     local sectionY = y + 138
+    for _, definition in ipairs(RATE_CONTROLS) do
+        local control = controls.rates[definition.id]
+        if control then
+            control.label.Position = Vector2.new(x + 12, sectionY)
+            control.value.Position = Vector2.new(x + 264, sectionY)
+            control.hit.Position = Vector2.new(x + 12, sectionY + 12)
+            control.track.Position = Vector2.new(x + 12, sectionY + 21)
+            control.fill.Position = control.track.Position
+            sectionY = sectionY + 34
+        end
+    end
     for _, group in ipairs(OPTION_GROUPS) do
         local section = controls.sections[group.id]
         if section then
@@ -796,6 +905,9 @@ function Overlay:_setMenuVisible(visible)
     for _, option in pairs(controls.options) do
         setVisible(option, visible)
     end
+    for _, rate in pairs(controls.rates) do
+        setVisible(rate, visible)
+    end
     for _, section in pairs(controls.sections) do
         setVisible(section, visible)
     end
@@ -855,6 +967,18 @@ function Overlay:_renderState(state)
             or (not available and enabled and "Standby" or (enabled and "On" or "Off"))
     end
 
+    for _, definition in ipairs(RATE_CONTROLS) do
+        local control = controls.rates[definition.id]
+        if control then
+            local value = math.clamp(settings[definition.id] or 0, 0, 100)
+            local alpha = value / 100
+            control.fill.Size = Vector2.new(276 * alpha, 4)
+            control.knob.Position =
+                Vector2.new(control.track.Position.X + 276 * alpha, control.track.Position.Y + 2)
+            control.value.Text = ("%d%%"):format(math.round(value))
+        end
+    end
+
     local alpha = (settings.fov - settings.minimumFov) / (settings.maximumFov - settings.minimumFov)
     controls.sliderFill.Size = Vector2.new(276 * alpha, 4)
     controls.sliderKnob.Position = Vector2.new(self.sliderStartX + 276 * alpha, controls.sliderTrack.Position.Y + 2)
@@ -870,8 +994,11 @@ function Overlay:_renderState(state)
     local cosmeticMode = state.cosmeticMode == "gloves" and "gloves" or "weapon"
     local gloveColor = settings.gloveColorOverride
     self.gloveColorVisible = cosmeticMode == "gloves" and type(gloveColor) == "table"
+    local collapsedHeight = (self.optionsPanelHeight or 560) + 36
     controls.panel.Size = Vector2.new(300, if self.cosmeticsSupported
-        then (self.cosmeticsOpen and (self.gloveColorVisible and 798 or 724) or 596)
+        then (self.cosmeticsOpen
+            and (collapsedHeight + (self.gloveColorVisible and 202 or 128))
+            or collapsedHeight)
         else (self.optionsPanelHeight or 596))
     local cosmetics = cosmeticMode == "gloves" and (state.gloves or {}) or (state.cosmetics or {})
     local cosmeticControls = controls.cosmetics

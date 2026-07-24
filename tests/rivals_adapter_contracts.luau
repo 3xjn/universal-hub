@@ -10,13 +10,23 @@ assert(Rivals.match({ gameId = 6035872082, placeId = 0 }) == 100)
 assert(Rivals.match({ gameId = 0, placeId = 17625359962 }) == 200)
 assert(Rivals.match({ gameId = 0, placeId = 0 }) == 0)
 assert(Rivals.cosmetics == false)
-assert(table.find(Rivals.capabilities, "silentAim") and table.find(Rivals.capabilities, "triggerBot"))
+assert(
+    table.find(Rivals.capabilities, "silentAim")
+        and table.find(Rivals.capabilities, "triggerBot")
+        and table.find(Rivals.capabilities, "humanAim")
+        and table.find(Rivals.capabilities, "aimSmoothness")
+        and table.find(Rivals.capabilities, "headshotRate")
+        and table.find(Rivals.capabilities, "missRate")
+)
 assert(not table.find(Rivals.capabilities, "wallbang"), "RIVALS must not advertise unverified hit forgery")
 
-local function player(teamId)
+local function player(teamId, environmentId)
     return {
         GetAttribute = function(_self, name)
-            return name == "TeamID" and teamId or nil
+            if name == "TeamID" then
+                return teamId
+            end
+            return name == "EnvironmentID" and environmentId or nil
         end,
     }
 end
@@ -35,16 +45,102 @@ local function character(health)
     }
 end
 
-local localPlayer = player("Blue")
-local enemyPlayer = player("Red")
-local teammate = player("Blue")
+local localPlayer = player("Blue", "MatchA")
+local enemyPlayer = player("Red", "MatchA")
+local teammate = player("Blue", "MatchA")
 assert(Rivals.isOpponent(localPlayer, enemyPlayer, character(150)) == true)
 assert(Rivals.isOpponent(localPlayer, teammate, character(150)) == false)
 assert(Rivals.isOpponent(localPlayer, enemyPlayer, character(0)) == false)
 assert(Rivals.isOpponent(localPlayer, localPlayer, character(150)) == false)
 assert(
+    Rivals.isOpponent(localPlayer, player("Red", "MatchB"), character(150)) == false,
+    "RIVALS ESP and aim must exclude players assigned to another EnvironmentID"
+)
+assert(
+    Rivals.isOpponent(player(nil, nil), player(nil, "MatchB"), character(150)) == false,
+    "RIVALS lobby observations must exclude players already assigned to a match"
+)
+assert(
     Rivals.isOpponent(player(nil), player(nil), character(150)) == true,
     "FFA players without TeamID must remain eligible"
+)
+
+local closestCandidate = {
+    position = Vector3.new(4, 0, 0),
+    screenDistance = 80,
+    visible = true,
+}
+local cursorCandidate = {
+    position = Vector3.new(20, 0, 0),
+    screenDistance = 5,
+    visible = true,
+}
+assert(
+    Rivals.closestObservation(
+        { cursorCandidate, closestCandidate },
+        Vector3.zero,
+        { maxScreenDistance = 180 }
+    ) == closestCandidate,
+    "Human Aim must prioritize physical distance over cursor distance"
+)
+assert(
+    Rivals.closestObservation(
+        { cursorCandidate, closestCandidate },
+        Vector3.zero,
+        { maxScreenDistance = 40 }
+    ) == cursorCandidate,
+    "Human Aim must still respect the configured camera FOV"
+)
+
+local aimRoot = {
+    CFrame = CFrame.new(Vector3.zero),
+    Position = Vector3.zero,
+    Size = Vector3.new(2, 2, 1),
+}
+local aimHead = {
+    Name = "Head",
+    Position = Vector3.new(0, 2, 0),
+}
+local aimCharacter = {
+    FindFirstChild = function(_self, name)
+        return ({ Head = aimHead, HumanoidRootPart = aimRoot })[name]
+    end,
+}
+local baseAimObservation = {
+    character = aimCharacter,
+    part = aimRoot,
+    position = aimRoot.Position,
+}
+local headAim = Rivals.applyAimRates(baseAimObservation, {
+    headshotRate = 100,
+    missRate = 0,
+}, function()
+    return 0
+end)
+assert(
+    headAim.position == aimHead.Position and headAim.part == aimHead and not headAim.intentionalMiss,
+    "A 100% headshot rate must aim at the live Head part"
+)
+local missedAim = Rivals.applyAimRates(baseAimObservation, {
+    headshotRate = 100,
+    missRate = 100,
+}, function()
+    return 0
+end)
+assert(
+    missedAim.intentionalMiss == true
+        and missedAim.position == Vector3.new(3.5, 0, 0)
+        and missedAim.part == aimRoot,
+    "Miss rate must take priority and produce a stable point outside the target body"
+)
+assert(
+    Rivals.applyAimRates(baseAimObservation, {
+        headshotRate = 0,
+        missRate = 0,
+    }, function()
+        error("Zero rates must not consume random samples")
+    end) == baseAimObservation,
+    "Zero accuracy rates must preserve existing targeting behavior"
 )
 
 assert(Rivals.itemName({ Info = { DisplayName = "Energy Rifle" }, Name = "Internal" }) == "Energy Rifle")
@@ -196,6 +292,7 @@ local splashAim = Rivals.solveSplashAim(
 assert(
     splashAim
         and splashAim.impact.Y == 0
+        and splashAim.predictedPosition.X > splashTarget.position.X
         and (splashAim.impact - splashAim.predictedPosition).Magnitude <= 16,
     "Splash aiming must lead the player and verify the nearest environment impact inside blast radius"
 )
@@ -222,6 +319,25 @@ assert(
     "Dagger aiming must lead target movement and compensate for its measured projectile gravity"
 )
 
+local smoothedRotation = Rivals.smoothRotation(
+    Vector2.zero,
+    Vector2.new(0.5, math.pi - 0.1),
+    100,
+    1 / 60
+)
+assert(
+    smoothedRotation.X > 0
+        and smoothedRotation.X < 0.5
+        and smoothedRotation.Y > 0
+        and smoothedRotation.Y < math.pi - 0.1,
+    "Maximum Camera Aim smoothness must move toward the target without snapping"
+)
+assert(
+    Rivals.smoothRotation(Vector2.zero, Vector2.new(0.5, 1), 0, 1 / 60)
+        == Vector2.new(0.5, 1),
+    "Zero Camera Aim smoothness must preserve instant rotation"
+)
+
 local knifeTargetRoot = {
     CFrame = CFrame.lookAt(Vector3.new(5, 0, 0), Vector3.new(6, 0, 0)),
     Position = Vector3.new(5, 0, 0),
@@ -237,17 +353,25 @@ local knifeObservation = {
 }
 local knifeInfo = {
     AttackReach = 6,
+    HeavyAttackReach = 7,
     CriticalDamage = 150,
 }
 assert(Rivals.backstabReady(Vector3.new(0, 0, 0), knifeObservation, knifeInfo) == true)
 assert(Rivals.backstabReady(Vector3.new(10, 0, 0), knifeObservation, knifeInfo) == false)
+assert(
+    Rivals.backstabReady(Vector3.new(-1.5, 0, 0), knifeObservation, knifeInfo) == true,
+    "Knife backstab readiness must use the live 7-stud heavy-attack reach"
+)
 knifeObservation.health = 151
 assert(
     Rivals.backstabReady(Vector3.new(0, 0, 0), knifeObservation, knifeInfo) == false,
     "Knife Camera Aim must not turn for a backstab that cannot eliminate the target"
 )
 knifeObservation.health = 150
-assert(Rivals.backstabReady(Vector3.new(-2, 0, 0), knifeObservation, knifeInfo) == false)
+assert(
+    Rivals.backstabReady(Vector3.new(-2.1, 0, 0), knifeObservation, knifeInfo) == false,
+    "Knife backstab readiness must reject targets beyond heavy-attack reach"
+)
 
 local slingshotAim = Rivals.solveSlingshot(
     Vector3.new(0, 5, 0),
@@ -472,8 +596,12 @@ local targeting = {
     end,
 }
 local settings = {
+    aimSmoothness = 0,
     fov = 180,
     fullScreenAim = false,
+    headshotRate = 0,
+    humanAim = false,
+    missRate = 0,
     silentAim = true,
     triggerBot = false,
 }
@@ -495,18 +623,25 @@ local presses = 0
 local releases = 0
 local aimPresses = 0
 local aimReleases = 0
+local aimClicks = 0
 local currentTime = 10
 local ricochetSolves = 0
 local trajectoryDestroyed = false
 local trajectoryNodes = {}
 local rendered
 local inputCaptured = false
+local environmentCast = function()
+    return nil
+end
 local adapter = Rivals.new({
     aimPress = function()
         aimPresses += 1
     end,
     aimRelease = function()
         aimReleases += 1
+    end,
+    aimClick = function()
+        aimClicks += 1
     end,
     clock = function()
         return currentTime
@@ -515,12 +650,13 @@ local adapter = Rivals.new({
         clicks += 1
     end,
     environmentRaycast = function()
-        return function()
-            return nil
-        end
+        return environmentCast
     end,
     press = function()
         presses += 1
+    end,
+    random = function()
+        return 0
     end,
     release = function()
         releases += 1
@@ -596,6 +732,89 @@ assert(
 )
 assert(clicks == 0, "Camera Aim must not fire unless Trigger Bot is enabled")
 
+local closestRuntimePosition = origin + Vector3.new(3, 0, -4)
+local closestRuntimeTarget = {
+    character = {},
+    player = nil,
+    position = closestRuntimePosition,
+    screenDistance = 100,
+    visible = true,
+}
+closestRuntimeTarget.player = closestRuntimeTarget.character
+table.insert(observations, closestRuntimeTarget)
+settings.humanAim = true
+cameraModule.Rotation = Vector2.zero
+local nearestCallsBeforeHumanAim = #nearestOptions
+currentTime += 1
+renderCallback(1 / 60)
+local closestRotation = Rivals.rotationToward(origin, closestRuntimePosition)
+assert(
+    #nearestOptions == nearestCallsBeforeHumanAim,
+    "Human Aim must bypass cursor-distance target ranking"
+)
+assert(
+    (cameraModule.Rotation - closestRotation).Magnitude < closestRotation.Magnitude
+        and cameraModule.Rotation ~= closestRotation,
+    "Human Aim must smoothly move toward the physically closest eligible target"
+)
+table.remove(observations, assert(table.find(observations, closestRuntimeTarget)))
+settings.humanAim = false
+
+local runtimeAimRoot = {
+    CFrame = CFrame.new(targetPosition),
+    Position = targetPosition,
+    Size = Vector3.new(2, 2, 1),
+}
+local runtimeAimHead = {
+    Name = "Head",
+    Position = targetPosition + Vector3.new(0, 2, 0),
+}
+target.character.FindFirstChild = function(_self, name)
+    return ({ Head = runtimeAimHead, HumanoidRootPart = runtimeAimRoot })[name]
+end
+settings.headshotRate = 100
+currentTime += 1
+renderCallback()
+assert(
+    cameraModule.Rotation == Rivals.rotationToward(origin, runtimeAimHead.Position),
+    "Camera Aim must apply the configured headshot rate to its live selected target"
+)
+settings.headshotRate = 0
+settings.missRate = 100
+currentTime += 1
+renderCallback()
+assert(
+    cameraModule.Rotation
+        == Rivals.rotationToward(origin, targetPosition + Vector3.new(3.5, 0, 0)),
+    "Camera Aim must turn toward the intentional miss point for a configured miss"
+)
+settings.missRate = 0
+
+local clicksBeforeSmoothAim = clicks
+settings.aimSmoothness = 100
+settings.triggerBot = true
+cameraModule.Rotation = Vector2.zero
+currentTime += 1
+renderCallback(1 / 60)
+assert(
+    clicks == clicksBeforeSmoothAim,
+    "Trigger Bot must wait while smoothed Camera Aim is still converging"
+)
+local smoothFrames = 0
+repeat
+    smoothFrames += 1
+    currentTime += 1 / 60
+    renderCallback(1 / 60)
+until clicks > clicksBeforeSmoothAim or smoothFrames == 300
+assert(
+    clicks == clicksBeforeSmoothAim + 1 and smoothFrames > 1,
+    "Trigger Bot must fire after smoothed Camera Aim reaches the target"
+)
+clicks = clicksBeforeSmoothAim
+settings.aimSmoothness = 0
+settings.triggerBot = false
+currentTime += 1
+
 fighterModule.LocalFighter.Data.IsInShootingRange = false
 fighterModule.LocalFighter.Data.IsSpectating = true
 local duelRotationCalls = rotationCalls
@@ -618,6 +837,54 @@ rangeObservation.screenDistance = 4
 renderCallback()
 assert(clicks == 1, "Trigger Bot must use normal input only when a visible enemy crosses the reticle")
 
+localItem.Name = "RPG"
+localItem.Info = {
+    DamageType = "Splash",
+    DisplayName = "RPG",
+    IsProjectile = true,
+    ProjectileGravity = 0,
+    ProjectileLifetime = 5,
+    ProjectileSpeed = 100,
+    ShootExplosionRadius = 16,
+}
+settings.silentAim = true
+currentTime += 1
+local unsafeSplashClicks = clicks
+local unsafeSplashRotations = rotationCalls
+renderCallback()
+assert(
+    rotationCalls == unsafeSplashRotations,
+    "Splash Camera Aim must not fall back to a direct player shot without a verified environment impact"
+)
+assert(
+    clicks == unsafeSplashClicks,
+    "Splash Trigger Bot must not fire when Camera Aim cannot verify an environment impact"
+)
+
+settings.silentAim = false
+currentTime += 1
+renderCallback()
+assert(
+    clicks == unsafeSplashClicks,
+    "Splash Trigger Bot must independently require a verified environment impact"
+)
+
+environmentCast = floorRaycast
+settings.silentAim = true
+currentTime += 1
+renderCallback()
+assert(
+    rotationCalls == unsafeSplashRotations + 1 and clicks == unsafeSplashClicks + 1,
+    "Splash Camera Aim and Trigger Bot must use a verified environment impact"
+)
+
+clicks = unsafeSplashClicks
+environmentCast = function()
+    return nil
+end
+localItem.Name = "Burst Rifle"
+localItem.Info = { DisplayName = "Burst Rifle" }
+settings.silentAim = false
 localItem.Info.AimScopePercent = 0.5
 localItem.Data = { IsAiming = true }
 cameraModule._fov_weapons_spring = { Value = 0, Target = -50 }
@@ -708,19 +975,31 @@ target.character.FindFirstChild = function(_self, name)
     return name == "HumanoidRootPart" and knifeRoot or nil
 end
 fighterModule.LocalFighter.Entity.RootPart = {
-    Position = targetPosition - Vector3.xAxis * 5,
+    Position = targetPosition - Vector3.xAxis * 6.5,
 }
 localItem.Name = "Knife"
 localItem.Info = {
     AttackReach = 6,
+    HeavyAttackCooldown = 1.25,
+    HeavyAttackReach = 7,
     CriticalDamage = 150,
     DisplayName = "Knife",
 }
 observations[1].visible = true
+observations[1].screenDistance = settings.fov + 100
 currentTime += 1
 local backstabClicks = clicks
+local backstabAimClicks = aimClicks
+local backstabRotations = rotationCalls
 renderCallback()
-assert(clicks == backstabClicks + 1, "Knife Trigger Bot must strike a verified lethal backstab")
+assert(
+    rotationCalls == backstabRotations + 1,
+    "Knife Camera Aim must lock an already-close lethal rear target outside ordinary camera FOV"
+)
+assert(
+    clicks == backstabClicks and aimClicks == backstabAimClicks + 1,
+    "Knife Trigger Bot must use secondary fire for the live heavy/backstab attack"
+)
 
 target.character.FindFirstChildOfClass = function(_self, className)
     if className == "Humanoid" then
@@ -746,7 +1025,12 @@ cameraModule.Rotation = Vector2.zero
 renderCallback()
 assert(cameraModule.Rotation == Vector2.zero, "The open menu must suppress camera control")
 assert(
-    clicks == 5 and presses == 0 and releases == 0 and aimPresses == 1 and aimReleases == 1,
+    clicks == 4
+        and presses == 0
+        and releases == 0
+        and aimPresses == 1
+        and aimReleases == 1
+        and aimClicks == 1,
     "The open menu must suppress automated input"
 )
 

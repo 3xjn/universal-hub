@@ -17,10 +17,13 @@ local store = Store.new({
     cosmeticsOpen = false,
     menuVisible = true,
     settings = {
+        aimSmoothness = 0,
         enabled = false,
         fov = 100,
+        headshotRate = 0,
         minimumFov = 40,
         maximumFov = 200,
+        missRate = 0,
     },
 })
 local session = Session.new({
@@ -44,15 +47,24 @@ local session = Session.new({
 assert(previousStops == 1 and environment.UniversalHubSession == session)
 session:setOption("enabled", true)
 session:setFov(999)
+session:setRate("aimSmoothness", 42)
+session:setRate("headshotRate", 74.6)
+session:setRate("missRate", -10)
 session:toggleMenu()
 assert(store:Get().settings.enabled == true)
 assert(store:Get().settings.fov == 200, "FOV must clamp to the configured maximum")
+assert(
+    store:Get().settings.aimSmoothness == 42
+        and store:Get().settings.headshotRate == 75
+        and store:Get().settings.missRate == 0,
+    "Accuracy rates must round and clamp to percentages"
+)
 assert(store:Get().menuVisible == false, "Menu visibility must toggle through reactive state")
 session:setMenuVisible(true)
 assert(store:Get().menuVisible == true)
 session:setCosmeticsOpen(true)
 assert(store:Get().cosmeticsOpen == true, "Cosmetics disclosure must be reactive UI state")
-assert(#savedSettings == 2, "Only persistent settings changes should request a config save")
+assert(#savedSettings == 5, "Only persistent settings changes should request a config save")
 
 session:Add(function()
     table.insert(cleanupOrder, "first")

@@ -63,6 +63,7 @@ assert(
 )
 
 local defaultSettings = {
+    aimSmoothness = 0,
     bhop = false,
     boxes = true,
     chams = true,
@@ -71,11 +72,14 @@ local defaultSettings = {
     fullScreenAim = false,
     gloveColorOverride = false,
     gloveOverride = false,
+    headshotRate = 0,
     health = true,
+    humanAim = false,
     knifeAura = false,
     maximumFov = 500,
     microStep = false,
     minimumFov = 40,
+    missRate = 0,
     names = true,
     noFlash = false,
     noRecoil = false,
@@ -203,6 +207,9 @@ overlay = Overlay.new({
     setOption = function(name, enabled)
         session:setOption(name, enabled)
     end,
+    setRate = function(name, value)
+        session:setRate(name, value)
+    end,
     cycleSkin = function(direction)
         adapter:cycleSkin(direction)
     end,
@@ -228,6 +235,7 @@ overlay = Overlay.new({
 })
 
 local created, result = pcall(adapterDefinition.new, {
+    aimClick = mouse2click,
     aimPress = mouse2press,
     aimRelease = mouse2release,
     click = mouse1click,
