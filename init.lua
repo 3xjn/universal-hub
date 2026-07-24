@@ -222,6 +222,9 @@ overlay = Overlay.new({
 
 local created, result = pcall(adapterDefinition.new, {
     click = mouse1click,
+    gcObjects = function()
+        return getgc(true)
+    end,
     hookFunction = hookfunction,
     isInputCaptured = function()
         return inputCapture:IsEnabled()

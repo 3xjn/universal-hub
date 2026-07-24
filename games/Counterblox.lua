@@ -173,6 +173,9 @@ function Counterblox.new(context)
     local Skins = loadModule(ReplicatedStorage.Database.Components.Libraries.Skins)
 
     local click = assert(context.click, "Counterblox adapter requires a click function")
+    local gcObjects = context.gcObjects or function()
+        return {}
+    end
     local hookFunction = assert(context.hookFunction, "Counterblox adapter requires hookfunction")
     local restoreFunction = assert(context.restoreFunction, "Counterblox adapter requires restorefunction")
     local setThirdPerson = context.setThirdPerson or function() end
@@ -571,7 +574,8 @@ function Counterblox.new(context)
 
     local function applyCosmeticToComponent(component, weaponName, override)
         local oldViewmodel = component.Viewmodel
-        local wasEquipped = oldViewmodel and oldViewmodel.IsEquipped == true
+        local wasEquipped = oldViewmodel
+            and (oldViewmodel.IsEquipped == true or store:Get().activeWeapon == weaponName)
         component.Skin = override.skin
         component.Float = override.wear
         component.StatTrack = override.statTrak
@@ -583,6 +587,29 @@ function Counterblox.new(context)
             component.Viewmodel = replacement
             if wasEquipped then
                 replacement:equip(true)
+            end
+        end
+    end
+
+    local function trackExistingComponents()
+        local success, objects = pcall(gcObjects)
+        if not success or type(objects) ~= "table" then
+            return
+        end
+
+        for _, component in ipairs(objects) do
+            if type(component) == "table"
+                and rawget(component, "Player") == LocalPlayer
+                and rawget(component, "IsDestroyed") ~= true
+            then
+                local name = rawget(component, "Name")
+                local viewmodel = rawget(component, "Viewmodel")
+                if type(name) == "string"
+                    and type(viewmodel) == "table"
+                    and type(rawget(viewmodel, "destroy")) == "function"
+                then
+                    trackedComponents[component] = name
+                end
             end
         end
     end
@@ -827,6 +854,7 @@ function Counterblox.new(context)
             return component
         end
     )
+    trackExistingComponents()
 
     hooks.workspaceRaycastTarget = Workspace.Raycast
     hooks.workspaceRaycastOriginal = hookFunction(hooks.workspaceRaycastTarget, function(workspaceInstance, origin, direction, params)

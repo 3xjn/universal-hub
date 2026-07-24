@@ -369,6 +369,21 @@ local localPlayer = {
         return nil
     end,
 }
+local existingViewmodelDestroyCalls = 0
+local existingLiveComponent = {
+    Float = 0,
+    IsDestroyed = false,
+    Name = "AK-47",
+    Player = localPlayer,
+    Skin = "Stock",
+    StatTrack = false,
+    Viewmodel = {
+        IsEquipped = false,
+        destroy = function()
+            existingViewmodelDestroyCalls += 1
+        end,
+    },
+}
 local gameMode = "Competitive"
 local serverGameMode = "Competitive"
 local renderCallback
@@ -500,6 +515,9 @@ local initialized, adapter = pcall(Counterblox.new, {
     click = function()
         clickCount += 1
     end,
+    gcObjects = function()
+        return { existingLiveComponent }
+    end,
     hookFunction = function(target, replacement)
         hookImplementations[target] = replacement
         return target
@@ -629,6 +647,12 @@ assert(
 )
 adapter:cycleSkin(1)
 assert(adapterState.settings.skinOverrides["AK-47"].skin == "PinPoint")
+assert(
+    existingLiveComponent.Viewmodel.ModelName == "AK-47"
+        and existingLiveComponent.Viewmodel.IsEquipped == true
+        and existingViewmodelDestroyCalls == 1,
+    "Changing a cosmetic must immediately rebuild the already-live equipped viewmodel"
+)
 local component = hookImplementations[weaponComponentModule.new](
     localPlayer,
     "identifier",
