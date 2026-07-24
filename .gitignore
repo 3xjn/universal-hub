@@ -1,0 +1,5 @@
+.debug-journal.md
+.omo/
+debug-*.lua
+*-inspection.json
+spin-network-*
