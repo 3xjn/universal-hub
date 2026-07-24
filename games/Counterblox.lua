@@ -750,6 +750,14 @@ function Counterblox.new(context)
         return hooks.spreadOriginal(bullet)
     end)
 
+    hooks.spreadUpdateTarget = Bullet._updateShotSpread
+    hooks.spreadUpdateOriginal = hookFunction(hooks.spreadUpdateTarget, function(bullet, ...)
+        if not stopped and store:Get().settings.noSpread then
+            return nil
+        end
+        return hooks.spreadUpdateOriginal(bullet, ...)
+    end)
+
     hooks.recoilTarget = CameraController.weaponKick
     hooks.recoilOriginal = hookFunction(hooks.recoilTarget, function(...)
         if not stopped and store:Get().settings.noRecoil then
@@ -1295,6 +1303,7 @@ function Counterblox.new(context)
         restoreFunction(hooks.flashTarget)
         restoreFunction(hooks.cameraUpdateTarget)
         restoreFunction(hooks.recoilTarget)
+        restoreFunction(hooks.spreadUpdateTarget)
         restoreFunction(hooks.spreadTarget)
         restoreFunction(hooks.bulletTarget)
     end

@@ -121,8 +121,12 @@ assert(rejectedAccepted == false, "A penetrated wall is not an accepted path unl
 assert(rejected == originalResult, "Rejected penetration must preserve the game's original raycast")
 
 local inventoryController = {}
+local spreadUpdateCalls = 0
 local bulletModule = {
     _performRaycast = function() end,
+    _updateShotSpread = function()
+        spreadUpdateCalls += 1
+    end,
     getTrueSpread = function()
         return 12
     end,
@@ -834,6 +838,12 @@ local gameGloves = skinsModule.GetGloves("T Glove", "Stock", 0.2)
 assert(gameGloves.name == "T Glove" and gameGloves.skin == "Stock" and gameGloves.wear == 0.2)
 
 assert(hookImplementations[bulletModule.getTrueSpread]({}) == 0)
+assert(
+    hookImplementations[bulletModule._updateShotSpread],
+    "No Spread must block the internal spread spring update that drives crosshair presentation"
+)
+hookImplementations[bulletModule._updateShotSpread]({})
+assert(spreadUpdateCalls == 0, "No Spread must not leave the visual spread spring expanding")
 adapterState.settings.noSpread = false
 assert(hookImplementations[bulletModule.getTrueSpread]({}) == 12)
 assert(hookImplementations[flashEffect.Flash], "No Flash must hook the centralized FlashEffect.Flash seam")
