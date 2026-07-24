@@ -488,6 +488,14 @@ game = {
         return services[name]
     end,
 }
+getrenv = function()
+    return {
+        require = function(module)
+            table.insert(requiredModules, module)
+            return assert(moduleValues[module], "unexpected game module requirement")
+        end,
+    }
+end
 
 local initialized, adapter = pcall(Counterblox.new, {
     click = function()
@@ -523,10 +531,6 @@ local initialized, adapter = pcall(Counterblox.new, {
         },
     },
     render = function() end,
-    requireModule = function(module)
-        table.insert(requiredModules, module)
-        return assert(moduleValues[module], "unexpected module requirement")
-    end,
     restoreFunction = function() end,
     settingsChanged = function()
         adapterState.settingsChanged = (adapterState.settingsChanged or 0) + 1

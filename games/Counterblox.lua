@@ -158,20 +158,27 @@ function Counterblox.new(context)
     local Workspace = game:GetService("Workspace")
     local LocalPlayer = Players.LocalPlayer
 
-    local requireModule: (any) -> any = context.requireModule or require
-    local Bullet = requireModule(ReplicatedStorage.Components.Weapon.Classes.Bullet)
-    local Melee = requireModule(ReplicatedStorage.Components.Melee)
-    local CameraController = requireModule(ReplicatedStorage.Controllers.CameraController)
-    local GetRayIgnore = requireModule(ReplicatedStorage.Components.Common.GetRayIgnore)
-    local GetWeaponProperties = requireModule(ReplicatedStorage.Components.Common.GetWeaponProperties)
-    local GameRaycast = requireModule(ReplicatedStorage.Shared.Raycast)
-    local CharacterClass = requireModule(ReplicatedStorage.Classes.Character)
-    local FlashEffect = requireModule(ReplicatedStorage.Components.Common.VFXLibary.FlashEffect)
-    local VoxelSmoke = requireModule(ReplicatedStorage.Components.Common.VFXLibary.CreateVoxelSmoke)
+    local requireModule: ((any) -> any)? = context.requireModule
+    if not requireModule and type(getrenv) == "function" then
+        local success, gameEnvironment = pcall(getrenv)
+        if success and type(gameEnvironment) == "table" and type(gameEnvironment.require) == "function" then
+            requireModule = gameEnvironment.require
+        end
+    end
+    local loadModule: (any) -> any = requireModule or require
+    local Bullet = loadModule(ReplicatedStorage.Components.Weapon.Classes.Bullet)
+    local Melee = loadModule(ReplicatedStorage.Components.Melee)
+    local CameraController = loadModule(ReplicatedStorage.Controllers.CameraController)
+    local GetRayIgnore = loadModule(ReplicatedStorage.Components.Common.GetRayIgnore)
+    local GetWeaponProperties = loadModule(ReplicatedStorage.Components.Common.GetWeaponProperties)
+    local GameRaycast = loadModule(ReplicatedStorage.Shared.Raycast)
+    local CharacterClass = loadModule(ReplicatedStorage.Classes.Character)
+    local FlashEffect = loadModule(ReplicatedStorage.Components.Common.VFXLibary.FlashEffect)
+    local VoxelSmoke = loadModule(ReplicatedStorage.Components.Common.VFXLibary.CreateVoxelSmoke)
     local WeaponComponentScript = ReplicatedStorage.Classes.WeaponComponent
-    local WeaponComponent = requireModule(WeaponComponentScript)
-    local Viewmodel = requireModule(WeaponComponentScript.Classes.Viewmodel)
-    local Skins = requireModule(ReplicatedStorage.Database.Components.Libraries.Skins)
+    local WeaponComponent = loadModule(WeaponComponentScript)
+    local Viewmodel = loadModule(WeaponComponentScript.Classes.Viewmodel)
+    local Skins = loadModule(ReplicatedStorage.Database.Components.Libraries.Skins)
 
     local click = assert(context.click, "Counterblox adapter requires a click function")
     local hookFunction = assert(context.hookFunction, "Counterblox adapter requires hookfunction")
