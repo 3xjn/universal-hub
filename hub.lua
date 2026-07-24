@@ -32,6 +32,7 @@ for _, path in ipairs({
     "modules/Session.lua",
     "modules/Overlay.lua",
     "games/Counterblox.lua",
+    "games/Rivals.lua",
 }) do
     sources[path] = httpGame:HttpGet(sourceBaseUrl .. path)
 end

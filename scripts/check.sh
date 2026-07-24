@@ -34,7 +34,8 @@ luau-lsp analyze \
     modules/Registry.lua \
     modules/Session.lua \
     modules/Overlay.lua \
-    games/Counterblox.lua
+    games/Counterblox.lua \
+    games/Rivals.lua
 
 lune run tests/store_contracts.luau
 lune run tests/remote_loader_contracts.luau
@@ -45,4 +46,5 @@ lune run tests/registry_contracts.luau
 lune run tests/session_contracts.luau
 lune run tests/overlay_contracts.luau
 lune run tests/counterblox_adapter_contracts.luau
+lune run tests/rivals_adapter_contracts.luau
 printf 'universal-hub-check-ok\n'

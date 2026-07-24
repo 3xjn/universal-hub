@@ -60,6 +60,7 @@ local store = Store.new({
     menuVisible = true,
     settings = {
         boxes = true,
+        chams = true,
         fov = 180,
         fovCircle = true,
         fullScreenAim = false,
@@ -101,12 +102,19 @@ local overlay = Overlay.new({
         createSurface = function()
             return surface
         end,
+        supports = function()
+            return true
+        end,
     },
+    gameLabel = "Test Game",
     getCamera = function()
         return {
             ViewportSize = Vector2.new(1280, 720),
         }
     end,
+    optionLabels = {
+        silentAim = "Camera Aim",
+    },
     setFov = function(value)
         table.insert(fovChanges, value)
     end,
@@ -147,6 +155,8 @@ local overlay = Overlay.new({
 })
 
 assert(captures[1] == true, "A visible Drawing menu must immediately release and own the cursor")
+assert(overlay.controls.title.Text == "Universal Hub · Test Game")
+assert(overlay.controls.options.silentAim.label.Text == "Camera Aim")
 overlay.controls.options.silentAim.row.callbacks.click()
 assert(optionChanges[1].name == "silentAim" and optionChanges[1].value == true)
 assert(overlay.controls.sections.rage.label.Text == "RAGE")
@@ -160,7 +170,9 @@ assert(overlay.controls.options.microStep.marker ~= nil)
 assert(overlay.controls.options.noFlash.label.Text == "No Flash")
 assert(overlay.controls.options.noSmoke.label.Text == "No Smoke")
 assert(overlay.controls.options.noWeaponSlow.label.Text == "No Weapon Slow")
-assert(overlay.controls.panel.Size.Y == 562, "Collapsed cosmetics must remain inside the compact panel")
+assert(overlay.controls.options.boxes.label.Text == "Hitboxes")
+assert(overlay.controls.options.chams.label.Text == "Chams")
+assert(overlay.controls.panel.Size.Y == 596, "Collapsed cosmetics must contain the extra visual row")
 assert(overlay.controls.fovLabel.Text == "FOV · 180 px")
 assert(
     overlay.controls.fovValue.Text == "Fullscreen Off",
@@ -207,7 +219,7 @@ assert(fovChanges[1] == 500, "FOV pointer input must clamp through the slider")
 overlay.controls.cosmetics.header.callbacks.click()
 assert(cosmeticsVisibilityChanges[1] == true)
 store:Patch({ cosmeticsOpen = true })
-assert(overlay.controls.panel.Size.Y == 690)
+assert(overlay.controls.panel.Size.Y == 724)
 assert(overlay.controls.cosmetics.skinName.Text == "PinPoint")
 assert(overlay.controls.cosmetics.weaponModeLabel.Text == "AK-47")
 assert(overlay.controls.cosmetics.gloveModeLabel.Text == "Gloves")
@@ -243,7 +255,7 @@ store:Patch({
         },
     },
 })
-assert(overlay.controls.panel.Size.Y == 764)
+assert(overlay.controls.panel.Size.Y == 798)
 assert(overlay.controls.cosmetics.statTrakValue.Text == "On")
 assert(overlay.controls.cosmetics.colorChannels.r.value.Text == "64")
 assert(overlay.controls.cosmetics.colorChannels.g.value.Text == "128")
@@ -316,6 +328,9 @@ overlay:render({
 local playerNodes = overlay.playerNodes[player]
 assert(playerNodes.box.Visible == false, "Per-part outlines must replace the coarse player box")
 assert(#playerNodes.bodyParts == 2)
+assert(playerNodes.bodyParts[1].outline.Visible == true)
+assert(playerNodes.bodyParts[1].outline.Position == Vector2.new(116, 100))
+assert(playerNodes.bodyParts[1].outline.Size == Vector2.new(18, 18))
 assert(#playerNodes.bodyParts[1].faces == 6)
 assert(playerNodes.bodyParts[1].faces[1].Visible == true)
 assert(playerNodes.bodyParts[1].faces[1].Filled == true)
@@ -336,6 +351,25 @@ assert(playerNodes.bodyParts[2].faces[1].PointB == Vector2.new(136, 121))
 assert(playerNodes.bodyParts[2].faces[1].PointC == Vector2.new(136, 158))
 assert(playerNodes.bodyParts[2].faces[1].PointD == Vector2.new(110, 160))
 assert(playerNodes.bodyParts[2].faces[1].Color == Color3.fromRGB(230, 107, 110))
+
+store:Patch({ settings = { boxes = false } })
+overlay:render(overlay.observations, Vector2.new(640, 360))
+assert(playerNodes.bodyParts[1].outline.Visible == false, "Hitboxes must control only body-part outlines")
+assert(playerNodes.bodyParts[1].faces[1].Visible == true, "Disabling Hitboxes must preserve Chams")
+store:Patch({ settings = { boxes = true, chams = false } })
+overlay:render(overlay.observations, Vector2.new(640, 360))
+assert(playerNodes.bodyParts[1].outline.Visible == true, "Hitboxes must remain independently available")
+assert(playerNodes.bodyParts[1].faces[1].Visible == false, "Chams must control only filled cuboid faces")
+overlay.optionSupport.chams = false
+overlay:_renderState(store:Get())
+assert(overlay.controls.options.chams.value.Text == "N/A")
+local optionChangeCount = #optionChanges
+overlay.controls.options.chams.row.callbacks.click()
+assert(#optionChanges == optionChangeCount, "Unsupported Chams must not publish a misleading setting change")
+overlay.optionSupport.chams = true
+store:Patch({ settings = { chams = true } })
+overlay:render(overlay.observations, Vector2.new(640, 360))
+
 assert(playerNodes.name.Text == "Opponent" and playerNodes.name.Visible == true)
 assert(playerNodes.healthTrack.Visible == true and playerNodes.healthFill.Visible == true)
 assert(playerNodes.healthTrack.Position == Vector2.new(93, 100))
@@ -345,6 +379,21 @@ assert(math.abs(playerNodes.healthFill.Position.Y - 128.44) < 1e-4)
 assert(playerNodes.healthFill.Size.X == 2)
 assert(math.abs(playerNodes.healthFill.Size.Y - 70.56) < 1e-4)
 assert(playerNodes.weapon.Text == "AK-47")
+local detailedObservations = overlay.observations
+overlay:render({
+    {
+        bounds = {
+            position = Vector2.new(40, 50),
+            size = Vector2.new(60, 120),
+        },
+        health = 1,
+        maxHealth = 1,
+        player = player,
+        visible = true,
+    },
+}, Vector2.new(100, 100))
+assert(playerNodes.weapon.Visible == false, "ESP must omit a weapon label when an adapter has no weapon data")
+overlay:render(detailedObservations, Vector2.new(640, 360))
 
 store:Patch({ menuVisible = false })
 assert(captures[2] == false, "Hiding the Drawing menu must restore gameplay input")
@@ -357,4 +406,52 @@ assert(overlay.controls.fovCircle.Visible == true, "Hiding the menu must not hid
 overlay:destroy()
 overlay:destroy()
 assert(destroyed == true, "Overlay destroy must tear down the Drawing surface")
+
+store:Patch({ menuVisible = true })
+local rivalsOverlay = Overlay.new({
+    capabilities = {
+        "silentAim",
+        "triggerBot",
+        "boxes",
+        "chams",
+        "names",
+        "health",
+        "weapon",
+    },
+    cosmetics = false,
+    drawing = {
+        createSurface = function()
+            return surface
+        end,
+        supports = function()
+            return true
+        end,
+    },
+    gameLabel = "RIVALS",
+    getCamera = function()
+        return {
+            ViewportSize = Vector2.new(1280, 720),
+        }
+    end,
+    optionLabels = {
+        silentAim = "Camera Aim",
+    },
+    store = store,
+})
+assert(rivalsOverlay.controls.options.silentAim.label.Text == "Camera Aim")
+assert(rivalsOverlay.controls.options.triggerBot ~= nil)
+assert(rivalsOverlay.controls.options.wallbang == nil)
+assert(rivalsOverlay.controls.options.noSpread == nil)
+assert(rivalsOverlay.controls.options.knifeAura == nil)
+assert(rivalsOverlay.controls.sections.rage ~= nil and rivalsOverlay.controls.sections.visuals ~= nil)
+assert(rivalsOverlay.controls.sections.melee == nil and rivalsOverlay.controls.sections.movement == nil)
+assert(
+    rivalsOverlay.controls.cosmetics.header.Visible == false,
+    "Adapters without cosmetics must omit the Counterblox cosmetics disclosure"
+)
+assert(
+    rivalsOverlay.controls.panel.Size.Y < 596,
+    "Capability filtering must collapse the panel around the remaining controls"
+)
+rivalsOverlay:destroy()
 print("overlay-contracts-ok")

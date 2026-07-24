@@ -15,21 +15,23 @@ The menu inherits Hydroxide's generated-code and tooling identity while remainin
 
 ## Layout contract
 
-- 300 × 562 px collapsed panel, anchored 20 px from the upper-right viewport edge
+- 300 × 596 px collapsed panel, anchored 20 px from the upper-right viewport edge
 - The FOV row shows the current radius on the left and an explicit `Fullscreen On/Off` toggle on the right; full-screen mode disables the radius slider and hides the FOV circle without disabling Silent Aim
 - Game name and live adapter status first
 - Equipped weapon and FOV are shared state, not game tabs
 - Compact two-column controls grouped by `RAGE`, `MELEE`, `MOVEMENT`, and `VISUALS`
 - `No Weapon Slow` sits with the combat modifiers; `No Flash` and `No Smoke` sit with visual suppression
 - Capability modifiers are visibly nested under their parent: `Wallbang` inherits `Silent Aim`, while `Micro Step` inherits `Knife Aura`
+- Game adapters expose only capabilities they implement. Adapter-unsupported controls and empty groups are omitted entirely; `N/A` is reserved for a supported capability whose required Drawing primitive is unavailable on the active executor.
 - Configured child controls show `Standby` while their parent is disabled instead of pretending to be active
 - Compact `RSHIFT` control in the title row hides the menu; the same key restores it
 - Pointer capture prevents menu interaction from firing the weapon
 - FOV follows the pointer
-- `COSMETICS` is a full-width collapsed disclosure at the bottom of the panel. Opening it expands the panel to 690 px and reveals an explicit two-option `Weapons` / `Gloves` segmented selector, skin picker, schema-constrained wear slider, conditional StatTrak toggle, and contextual reset. In Gloves mode, the StatTrak slot becomes a `Solid Color` control; enabling it expands three direct RGB sliders and colors only the local viewmodel's glove parts.
+- `COSMETICS` is a full-width collapsed disclosure at the bottom of the panel. Opening it expands the panel to 724 px and reveals an explicit two-option `Weapons` / `Gloves` segmented selector, skin picker, schema-constrained wear slider, conditional StatTrak toggle, and contextual reset. In Gloves mode, the StatTrak slot becomes a `Solid Color` control and expands the panel to 798 px; enabling it reveals three direct RGB sliders and colors only the local viewmodel's glove parts.
 - The selected cosmetics segment uses the accent surface while the inactive segment stays elevated. Both labels remain visible at all times; the active segment may show the selected weapon or glove family so mode switching is never hidden behind unrelated copy.
 - Cosmetic controls reuse the elevated control surface, accent active state, 4 px spacing rhythm, and Drawing Plex typography. The collapsed state consumes only one 30 px row.
-- Character overlays use projected character bounds for label placement and six filled `Quad` faces per body part, producing a translucent projected cuboid instead of axis-aligned mini-boxes or one coarse player rectangle
+- `Hitboxes` and `Chams` are independent visual controls. Hitboxes use each observed body part's projected bounds as a 1.5 px outline; Chams use six filled `Quad` faces per body part to produce a translucent projected cuboid
+- A visual control whose Drawing primitive is unavailable on the active executor remains visible but reads `N/A` and cannot publish a misleading enabled state
 - Cuboid faces use 0.18 Drawing opacity. Each body part uses the same five-point visibility sample as targeting: green means at least one sampled point is on-screen and directly shootable, red means every sampled point is blocked
 - Health is a 4 px vertical track anchored 7 px left of the projected character bounds. Its 2 px inner fill rises from the bottom, interpolating from blocked/error red at zero health to active/visible green at full health.
 - The legacy projected-bounds rectangle is only a compatibility fallback when an adapter cannot publish body-part observations
@@ -46,6 +48,6 @@ Visual suppression is transition-based. Enabling `No Flash` cancels the active f
 
 Full-screen aim removes only the screen-distance constraint. Team, alive, on-screen, visibility, and wall-penetration checks remain unchanged.
 
-Character observations publish `bodyParts` as projected per-part bounds and eight ordered cuboid corners with `visible` and normalized `visibility` values. The overlay owns only their retained Drawing nodes; targeting remains the single source of truth for geometry and line-of-sight.
+Character observations publish `bodyParts` as projected per-part bounds and eight ordered cuboid corners with `visible` and normalized `visibility` values. The overlay owns separate retained Square outlines and Quad faces; targeting remains the single source of truth for geometry and line-of-sight.
 
 Cosmetic overrides are local presentation state keyed by weapon name. They never call inventory remotes. The Counterblox adapter applies the selected skin, wear, and optional StatTrak value when a weapon component is created, refreshes a tracked equipped viewmodel when safe, and re-applies the override after respawn or re-equip. Glove substitution and solid-color application are scoped to local-player viewmodel construction so they cannot alter another player's gloves. Selected knife family/skin/wear, glove family/skin/wear, and optional glove color are stored per adapter in the executor workspace and restored on reload; menu disclosure state and live observations are not persisted.
