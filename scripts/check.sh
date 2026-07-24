@@ -37,6 +37,7 @@ luau-lsp analyze \
     games/Counterblox.lua
 
 lune run tests/store_contracts.luau
+lune run tests/hub_loader_contracts.luau
 lune run tests/config_contracts.luau
 lune run tests/input_capture_contracts.luau
 lune run tests/registry_contracts.luau

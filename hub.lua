@@ -10,6 +10,12 @@ type HttpGame = typeof(game) & {
 local httpGame = game :: HttpGame
 
 if not environment.oh or not environment.oh.drawing or not environment.oh.targeting then
+    local hydroxideConfiguration = environment.HydroxideConfig or {}
+    hydroxideConfiguration.Owner = configuration.HydroxideOwner or "3xjn"
+    hydroxideConfiguration.Branch = configuration.HydroxideBranch or "dev"
+    hydroxideConfiguration.Web = true
+    environment.HydroxideConfig = hydroxideConfiguration
+
     local hydroxideUrl = configuration.HydroxideUrl
         or "https://raw.githubusercontent.com/3xjn/hydroxide/dev/init.lua"
     local hydroxideSource = httpGame:HttpGet(hydroxideUrl)
