@@ -59,18 +59,22 @@ local store = Store.new({
     },
     menuVisible = true,
     settings = {
+        aimSmoothness = 35,
         boxes = true,
         chams = true,
         fov = 180,
         fovCircle = true,
         fullScreenAim = false,
         gloveColorOverride = false,
+        headshotRate = 50,
         health = true,
+        humanAim = false,
         bhop = false,
         knifeAura = false,
         maximumFov = 500,
         microStep = false,
         minimumFov = 40,
+        missRate = 10,
         names = true,
         noFlash = false,
         noRecoil = false,
@@ -87,11 +91,34 @@ local store = Store.new({
 })
 local optionChanges = {}
 local fovChanges = {}
+local rateChanges = {}
 local captures = {}
 local menuVisibilityChanges = {}
 local cosmeticsVisibilityChanges = {}
 local cosmeticActions = {}
 local overlay = Overlay.new({
+    capabilities = {
+        "aimSmoothness",
+        "bhop",
+        "boxes",
+        "chams",
+        "headshotRate",
+        "health",
+        "knifeAura",
+        "microStep",
+        "missRate",
+        "names",
+        "noFlash",
+        "noRecoil",
+        "noSmoke",
+        "noSpread",
+        "noWeaponSlow",
+        "silentAim",
+        "spinBot",
+        "triggerBot",
+        "wallbang",
+        "weapon",
+    },
     cycleGlove = function(direction)
         table.insert(cosmeticActions, { action = "cycleGlove", value = direction })
     end,
@@ -126,6 +153,9 @@ local overlay = Overlay.new({
     end,
     setMenuVisible = function(value)
         table.insert(menuVisibilityChanges, value)
+    end,
+    setRate = function(name, value)
+        table.insert(rateChanges, { name = name, value = value })
     end,
     setOption = function(name, value)
         table.insert(optionChanges, { name = name, value = value })
@@ -172,7 +202,13 @@ assert(overlay.controls.options.noSmoke.label.Text == "No Smoke")
 assert(overlay.controls.options.noWeaponSlow.label.Text == "No Weapon Slow")
 assert(overlay.controls.options.boxes.label.Text == "Hitboxes")
 assert(overlay.controls.options.chams.label.Text == "Chams")
-assert(overlay.controls.panel.Size.Y == 596, "Collapsed cosmetics must contain the extra visual row")
+assert(overlay.controls.rates.aimSmoothness.label.Text == "Aim Smoothness")
+assert(overlay.controls.rates.headshotRate.label.Text == "Headshot Rate")
+assert(overlay.controls.rates.missRate.label.Text == "Miss Rate")
+assert(overlay.controls.rates.headshotRate.value.Text == "50%")
+assert(overlay.controls.rates.missRate.value.Text == "10%")
+assert(overlay.controls.rates.aimSmoothness.value.Text == "35%")
+assert(overlay.controls.panel.Size.Y == 698, "Collapsed cosmetics must contain aim controls")
 assert(overlay.controls.fovLabel.Text == "FOV · 180 px")
 assert(
     overlay.controls.fovValue.Text == "Fullscreen Off",
@@ -215,11 +251,35 @@ assert(#fovChanges == 0, "Disabled FOV slider must ignore pointer input in fulls
 store:Patch({ settings = { fullScreenAim = false } })
 overlay.controls.sliderHit.callbacks.pointerdown(nil, Vector2.new(1280, 0))
 assert(fovChanges[1] == 500, "FOV pointer input must clamp through the slider")
+overlay.controls.rates.headshotRate.hit.callbacks.pointerdown(
+    nil,
+    Vector2.new(overlay.controls.rates.headshotRate.hit.Position.X + 207, 0)
+)
+overlay.controls.rates.missRate.hit.callbacks.drag(
+    nil,
+    Vector2.new(overlay.controls.rates.missRate.hit.Position.X + 69, 0)
+)
+assert(
+    rateChanges[1].name == "headshotRate"
+        and rateChanges[1].value == 75
+        and rateChanges[2].name == "missRate"
+        and rateChanges[2].value == 25,
+    "Accuracy sliders must publish rounded percentages"
+)
+
+local panelStart = overlay.controls.panel.Position
+overlay.controls.panel.callbacks.pointerdown(nil, panelStart + Vector2.new(10, 10))
+overlay.controls.panel.callbacks.drag(nil, Vector2.new(510, 40))
+assert(
+    overlay.controls.panel.Position == Vector2.new(500, 22)
+        and overlay.controls.title.Position == Vector2.new(512, 34),
+    "Dragging the panel must move the complete Hub window as one unit"
+)
 
 overlay.controls.cosmetics.header.callbacks.click()
 assert(cosmeticsVisibilityChanges[1] == true)
 store:Patch({ cosmeticsOpen = true })
-assert(overlay.controls.panel.Size.Y == 724)
+assert(overlay.controls.panel.Size.Y == 826)
 assert(overlay.controls.cosmetics.skinName.Text == "PinPoint")
 assert(overlay.controls.cosmetics.weaponModeLabel.Text == "AK-47")
 assert(overlay.controls.cosmetics.gloveModeLabel.Text == "Gloves")
@@ -255,7 +315,7 @@ store:Patch({
         },
     },
 })
-assert(overlay.controls.panel.Size.Y == 798)
+assert(overlay.controls.panel.Size.Y == 900)
 assert(overlay.controls.cosmetics.statTrakValue.Text == "On")
 assert(overlay.controls.cosmetics.colorChannels.r.value.Text == "64")
 assert(overlay.controls.cosmetics.colorChannels.g.value.Text == "128")
@@ -326,11 +386,11 @@ overlay:render({
     },
 }, Vector2.new(640, 360))
 local playerNodes = overlay.playerNodes[player]
-assert(playerNodes.box.Visible == false, "Per-part outlines must replace the coarse player box")
+assert(playerNodes.box.Visible == true, "Hitboxes must draw one square around the whole character")
+assert(playerNodes.box.Position == Vector2.new(100, 100))
+assert(playerNodes.box.Size == Vector2.new(50, 100))
 assert(#playerNodes.bodyParts == 2)
-assert(playerNodes.bodyParts[1].outline.Visible == true)
-assert(playerNodes.bodyParts[1].outline.Position == Vector2.new(116, 100))
-assert(playerNodes.bodyParts[1].outline.Size == Vector2.new(18, 18))
+assert(playerNodes.bodyParts[1].outline == nil, "Hitboxes must not create boxes around individual body parts")
 assert(#playerNodes.bodyParts[1].faces == 6)
 assert(playerNodes.bodyParts[1].faces[1].Visible == true)
 assert(playerNodes.bodyParts[1].faces[1].Filled == true)
@@ -354,11 +414,11 @@ assert(playerNodes.bodyParts[2].faces[1].Color == Color3.fromRGB(230, 107, 110))
 
 store:Patch({ settings = { boxes = false } })
 overlay:render(overlay.observations, Vector2.new(640, 360))
-assert(playerNodes.bodyParts[1].outline.Visible == false, "Hitboxes must control only body-part outlines")
+assert(playerNodes.box.Visible == false, "Disabling Hitboxes must hide the character square")
 assert(playerNodes.bodyParts[1].faces[1].Visible == true, "Disabling Hitboxes must preserve Chams")
 store:Patch({ settings = { boxes = true, chams = false } })
 overlay:render(overlay.observations, Vector2.new(640, 360))
-assert(playerNodes.bodyParts[1].outline.Visible == true, "Hitboxes must remain independently available")
+assert(playerNodes.box.Visible == true, "Hitboxes must remain independently available")
 assert(playerNodes.bodyParts[1].faces[1].Visible == false, "Chams must control only filled cuboid faces")
 overlay.optionSupport.chams = false
 overlay:_renderState(store:Get())
@@ -399,7 +459,7 @@ store:Patch({ menuVisible = false })
 assert(captures[2] == false, "Hiding the Drawing menu must restore gameplay input")
 assert(overlay.controls.panel.Visible == false)
 assert(overlay.controls.options.silentAim.row.Visible == false)
-assert(playerNodes.box.Visible == false)
+assert(playerNodes.box.Visible == true)
 assert(playerNodes.bodyParts[1].faces[1].Visible == true, "Hiding the menu must not hide enabled player overlays")
 assert(overlay.controls.fovCircle.Visible == true, "Hiding the menu must not hide the enabled FOV circle")
 
@@ -410,8 +470,12 @@ assert(destroyed == true, "Overlay destroy must tear down the Drawing surface")
 store:Patch({ menuVisible = true })
 local rivalsOverlay = Overlay.new({
     capabilities = {
+        "aimSmoothness",
+        "humanAim",
         "silentAim",
         "triggerBot",
+        "headshotRate",
+        "missRate",
         "boxes",
         "chams",
         "names",
@@ -434,12 +498,21 @@ local rivalsOverlay = Overlay.new({
         }
     end,
     optionLabels = {
+        humanAim = "Human Aim",
         silentAim = "Camera Aim",
     },
+    setRate = function() end,
     store = store,
 })
 assert(rivalsOverlay.controls.options.silentAim.label.Text == "Camera Aim")
+assert(rivalsOverlay.controls.options.humanAim.label.Text == "Human Aim")
 assert(rivalsOverlay.controls.options.triggerBot ~= nil)
+assert(
+    rivalsOverlay.controls.rates.aimSmoothness
+        and rivalsOverlay.controls.rates.headshotRate
+        and rivalsOverlay.controls.rates.missRate,
+    "RIVALS must expose all configured aim-rate controls"
+)
 assert(rivalsOverlay.controls.options.wallbang == nil)
 assert(rivalsOverlay.controls.options.noSpread == nil)
 assert(rivalsOverlay.controls.options.knifeAura == nil)

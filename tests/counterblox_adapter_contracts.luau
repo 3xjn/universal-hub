@@ -123,7 +123,9 @@ assert(rejected == originalResult, "Rejected penetration must preserve the game'
 local inventoryController = {}
 local spreadUpdateCalls = 0
 local bulletModule = {
-    _performRaycast = function() end,
+    _performRaycast = function()
+        return originalResult
+    end,
     _updateShotSpread = function()
         spreadUpdateCalls += 1
     end,
@@ -159,11 +161,18 @@ local meleeModule = {
         meleeAimLook = currentCamera.CFrame.LookVector
     end,
 }
+local weaponRecoilCalls = 0
 local cameraController = {
+    setWeaponRecoil = function()
+        weaponRecoilCalls += 1
+    end,
     updateCamera = function(cameraFrame)
         currentCamera.CFrame = cameraFrame or roblox.CFrame.new()
     end,
     weaponKick = function() end,
+}
+local crosshairSettings = {
+    ["Follow Recoil"] = true,
 }
 local characterModule = {
     GetMaxSpeed = function()
@@ -351,6 +360,17 @@ local replicatedStorage = {
         CameraController = cameraController,
         InventoryController = inventoryController,
     },
+    Interface = {
+        Screens = {
+            Gameplay = {
+                Middle = {
+                    Crosshair = {
+                        Settings = crosshairSettings,
+                    },
+                },
+            },
+        },
+    },
     Components = {
         Common = {
             GetRayIgnore = getRayIgnore,
@@ -508,6 +528,7 @@ local moduleValues = {
     [bulletModule] = bulletModule,
     [cameraController] = cameraController,
     [characterModule] = characterModule,
+    [crosshairSettings] = crosshairSettings,
     [flashEffect] = flashEffect,
     [getRayIgnore] = getRayIgnore,
     [gameRaycast] = gameRaycast,
@@ -846,6 +867,28 @@ hookImplementations[bulletModule._updateShotSpread]({})
 assert(spreadUpdateCalls == 0, "No Spread must not leave the visual spread spring expanding")
 adapterState.settings.noSpread = false
 assert(hookImplementations[bulletModule.getTrueSpread]({}) == 12)
+hookImplementations[bulletModule._updateShotSpread]({})
+assert(spreadUpdateCalls == 1)
+assert(
+    hookImplementations[cameraController.setWeaponRecoil],
+    "No Recoil must hook the sustained weapon recoil spring in addition to weaponKick"
+)
+adapterState.settings.noRecoil = true
+hookImplementations[cameraController.setWeaponRecoil]({})
+assert(weaponRecoilCalls == 0, "No Recoil must suppress the sustained camera recoil channel")
+renderCallback()
+assert(
+    crosshairSettings["Follow Recoil"] == false,
+    "No Recoil must also suppress Counterblox's independent crosshair recoil animation"
+)
+adapterState.settings.noRecoil = false
+hookImplementations[cameraController.setWeaponRecoil]({})
+assert(weaponRecoilCalls == 1)
+renderCallback()
+assert(
+    crosshairSettings["Follow Recoil"] == true,
+    "Disabling No Recoil must restore the player's crosshair recoil preference"
+)
 assert(hookImplementations[flashEffect.Flash], "No Flash must hook the centralized FlashEffect.Flash seam")
 assert(hookImplementations[voxelSmoke.Create], "No Smoke must hook the centralized voxel smoke Create seam")
 assert(hookImplementations[characterModule.GetMaxSpeed], "No Weapon Slow must hook Character.GetMaxSpeed")
@@ -966,13 +1009,31 @@ adapterState.settings.silentAim = false
 adapterState.settings.wallbang = false
 nearestTargetVisible = true
 inputCaptured = true
+gameRaycastFirst = {
+    instance = wall,
+    position = Vector3.new(0, 0, -2),
+}
+gameRaycastHits = {}
+renderCallback(0.016)
+assert(
+    clickCount == clicksBeforeRejectedWallbang,
+    "Trigger Bot must not fire at a visible target when Counterblox rejects the directed hit path"
+)
+gameRaycastFirst = {
+    instance = targetPart,
+    position = nearestTargetPosition,
+}
 renderCallback(0.016)
 assert(
     clickCount == clicksBeforeRejectedWallbang + 1,
-    "Trigger Bot must select an eligible FOV target without requiring mouse hover or menu focus"
+    "Trigger Bot must fire when Counterblox accepts the directed hit path"
+)
+local triggerShot = hookImplementations[bulletModule._performRaycast](component.Bullet, 0)
+assert(
+    triggerShot ~= originalResult and triggerShot.Hits[1].Instance == targetPart,
+    "Trigger Bot must carry its validated target into the triggered shot even when Silent Aim is off"
 )
 inputCaptured = false
-hookImplementations[bulletModule._performRaycast](component.Bullet, 0)
 
 component.Name = "Skinned AK-47"
 adapterState.settings.silentAim = true

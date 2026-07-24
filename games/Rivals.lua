@@ -8,6 +8,10 @@ local Rivals = {
     capabilities = {
         "silentAim",
         "triggerBot",
+        "humanAim",
+        "aimSmoothness",
+        "headshotRate",
+        "missRate",
         "boxes",
         "chams",
         "names",
@@ -15,6 +19,7 @@ local Rivals = {
         "weapon",
     },
     optionLabels = {
+        humanAim = "Human Aim",
         silentAim = "Camera Aim",
     },
     cosmetics = false,
@@ -22,6 +27,7 @@ local Rivals = {
 
 local TRIGGER_INTERVAL = 0.1
 local TRIGGER_RADIUS = 8
+local MAX_OBSERVATION_DISTANCE = 2000
 local RICOCHET_BOUNCES = 2
 local RICOCHET_CACHE_INTERVAL = 0.15
 local RICOCHET_MAX_DISTANCE = 2048
@@ -63,9 +69,40 @@ function Rivals.isOpponent(localPlayer, player, character)
         return false
     end
 
+    if localPlayer:GetAttribute("EnvironmentID") ~= player:GetAttribute("EnvironmentID") then
+        return false
+    end
+
     local localTeam = localPlayer:GetAttribute("TeamID")
     local playerTeam = player:GetAttribute("TeamID")
     return localTeam == nil or playerTeam == nil or localTeam ~= playerTeam
+end
+
+function Rivals.closestObservation(observations, origin, options)
+    if not origin then
+        return nil
+    end
+
+    options = options or {}
+    local nearest
+    local nearestDistance = math.huge
+    for _, observation in ipairs(observations or {}) do
+        local position = observation.position
+        local screenDistance = observation.screenDistance
+        local insideFov = options.maxScreenDistance == nil
+            or type(screenDistance) == "number" and screenDistance <= options.maxScreenDistance
+        if position
+            and insideFov
+            and (options.includeBlocked or observation.visible)
+        then
+            local distance = (position - origin).Magnitude
+            if distance < nearestDistance then
+                nearest = observation
+                nearestDistance = distance
+            end
+        end
+    end
+    return nearest
 end
 
 function Rivals.itemName(item)
@@ -78,6 +115,44 @@ function Rivals.itemName(item)
         return info.DisplayName or info.Name or info.ItemName or item.Name
     end
     return item.Name
+end
+
+function Rivals.applyAimRates(observation, settings, random)
+    if not observation or not observation.position then
+        return observation
+    end
+
+    random = random or math.random
+    local missRate = math.clamp(settings.missRate or 0, 0, 100)
+    if missRate > 0 and random() * 100 < missRate then
+        local character = observation.character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not root then
+            return observation
+        end
+
+        local result = table.clone(observation)
+        local width = root.Size and root.Size.X or 2
+        result.intentionalMiss = true
+        result.part = root
+        result.position = observation.position + root.CFrame.RightVector * (width * 0.5 + 2.5)
+        return result
+    end
+
+    local headshotRate = math.clamp(settings.headshotRate or 0, 0, 100)
+    if headshotRate > 0 and random() * 100 < headshotRate then
+        local character = observation.character
+        local head = character and character:FindFirstChild("Head")
+        if head then
+            local result = table.clone(observation)
+            result.intentionalMiss = false
+            result.part = head
+            result.position = head.Position
+            return result
+        end
+    end
+
+    return observation
 end
 
 function Rivals.backstabReady(localPosition, observation, info)
@@ -95,7 +170,7 @@ function Rivals.backstabReady(localPosition, observation, info)
     end
 
     local offset = localPosition - targetRoot.Position
-    local reach = info.AttackReach
+    local reach = info.HeavyAttackReach or info.AttackReach
     if type(reach) ~= "number" or offset.Magnitude <= 1e-3 or offset.Magnitude > reach then
         return false
     end
@@ -107,6 +182,59 @@ end
 function Rivals.rotationToward(origin, target)
     local direction = (target - origin).Unit
     return Vector2.new(math.asin(direction.Y), math.atan2(-direction.X, -direction.Z))
+end
+
+function Rivals.smoothRotation(current, target, smoothness, deltaTime)
+    smoothness = math.clamp(smoothness or 0, 0, 100)
+    if smoothness <= 0 or not current then
+        return target
+    end
+
+    local speed = math.max(1.5, 30 * (1 - smoothness / 100))
+    local alpha = 1 - math.exp(-speed * math.max(deltaTime or 1 / 60, 0))
+    local yawDelta = (target.Y - current.Y + math.pi) % (math.pi * 2) - math.pi
+    return Vector2.new(
+        current.X + (target.X - current.X) * alpha,
+        current.Y + yawDelta * alpha
+    )
+end
+
+function Rivals.humanRotation(current, target, smoothness, deltaTime, state)
+    if not current then
+        return target
+    end
+
+    state = state or {}
+    local stepTime = math.max(deltaTime or 1 / 60, 1 / 240)
+    local smooth = math.clamp(smoothness or 0, 0, 100)
+    local yawError = (target.Y - current.Y + math.pi) % (math.pi * 2) - math.pi
+    local error = Vector2.new(target.X - current.X, yawError)
+    local targetMotion = Vector2.zero
+    if state.lastTarget then
+        targetMotion = Vector2.new(
+            target.X - state.lastTarget.X,
+            (target.Y - state.lastTarget.Y + math.pi) % (math.pi * 2) - math.pi
+        )
+    end
+    state.lastTarget = target
+
+    local targetSpeed = targetMotion.Magnitude / stepTime
+    local baseSpeed = math.max(1.5, 30 * (1 - smooth / 100))
+    local trackingSpeed = baseSpeed + math.min(targetSpeed * 0.8, 24)
+    local alpha = 1 - math.exp(-trackingSpeed * stepTime)
+    local curve = Vector2.zero
+    if error.Magnitude > 1e-6 then
+        local curveMagnitude = math.min(error.Magnitude * 0.08, math.rad(0.35))
+        local curveSign = state.curveSign or 1
+        curve = Vector2.new(-error.Y, error.X).Unit * curveMagnitude * curveSign
+    end
+
+    local step = error * alpha + targetMotion * 0.55 + curve * alpha
+    local maximumStep = error.Magnitude * 0.85
+    if step.Magnitude > maximumStep and maximumStep > 0 then
+        step = step.Unit * maximumStep
+    end
+    return current + step
 end
 
 function Rivals.reflectDirection(direction, normal)
@@ -635,6 +763,7 @@ function Rivals.new(context)
     assert(context and context.oh, "RIVALS adapter requires Hydroxide")
     assert(context.store, "RIVALS adapter requires a reactive store")
     assert(context.press and context.release, "RIVALS adapter requires held input support")
+    assert(context.aimClick, "RIVALS adapter requires secondary click support")
     assert(context.aimPress and context.aimRelease, "RIVALS adapter requires held aiming support")
 
     local Players = game:GetService("Players")
@@ -656,9 +785,14 @@ function Rivals.new(context)
     local ricochetCache
     local splashCache
     local slingshotCache
+    local aimPlan
+    local humanAimCharacter
+    local humanAimState
+    local renderDelta = 1 / 60
     local observations = {}
     local self = {}
     local clock = context.clock or os.clock
+    local random = context.random or math.random
     local trajectorySurface
     local trajectoryLines = {}
     local drawing = context.oh.drawing
@@ -689,11 +823,19 @@ function Rivals.new(context)
             and humanoid.Health > 0
     end
 
+    local function localFighterIsInCombat()
+        local fighter = FighterController.LocalFighter
+        local data = fighter and fighter.Data
+        return type(data) == "table"
+            and (data.IsInShootingRange == true or data.IsInDuel == true)
+    end
+
     local function isOpponent(player, character)
         return Rivals.isOpponent(LocalPlayer, player, character)
     end
 
     local function selectTarget(maxScreenDistance, includeBlocked)
+        local settings = store:Get().settings
         local options = {
             includeBlocked = includeBlocked,
             isEligible = isOpponent,
@@ -701,10 +843,96 @@ function Rivals.new(context)
         }
         if maxScreenDistance then
             options.maxScreenDistance = maxScreenDistance
-        elseif not store:Get().settings.fullScreenAim then
-            options.maxScreenDistance = store:Get().settings.fov
+        elseif not settings.fullScreenAim then
+            options.maxScreenDistance = settings.fov
+        end
+        if settings.humanAim then
+            local camera = Workspace.CurrentCamera
+            local cameraFrame = camera
+                and (camera.GetRenderCFrame and camera:GetRenderCFrame() or camera.CFrame)
+            return Rivals.closestObservation(
+                observations,
+                cameraFrame and cameraFrame.Position,
+                options
+            )
         end
         return targeting.nearestObservation(observations, options)
+    end
+
+    local function selectBackstabTarget(localPosition, info)
+        local nearest
+        local nearestDistance = math.huge
+        for _, observation in ipairs(observations) do
+            local character = observation.character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            if observation.visible
+                and root
+                and Rivals.backstabReady(localPosition, observation, info)
+            then
+                local distance = (localPosition - root.Position).Magnitude
+                if distance < nearestDistance then
+                    nearest = observation
+                    nearestDistance = distance
+                end
+            end
+        end
+        return nearest
+    end
+
+    local function plannedAimTarget(target, item)
+        local now = clock()
+        if aimPlan
+            and aimPlan.character == target.character
+            and aimPlan.item == item
+            and now < aimPlan.expiresAt
+        then
+            local refreshed = table.clone(target)
+            refreshed.intentionalMiss = aimPlan.target.intentionalMiss
+            refreshed.part = aimPlan.target.part
+            if refreshed.intentionalMiss then
+                local character = target.character
+                local root = character
+                    and character.FindFirstChild
+                    and character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    local width = root.Size and root.Size.X or 2
+                    refreshed.part = root
+                    refreshed.position = target.position
+                        + root.CFrame.RightVector * (width * 0.5 + 2.5)
+                end
+            elseif refreshed.part and refreshed.part.Name == "Head" then
+                local character = target.character
+                local head = character and character.FindFirstChild and character:FindFirstChild("Head")
+                if head then
+                    refreshed.part = head
+                    refreshed.position = head.Position
+                end
+            end
+            return refreshed
+        end
+
+        local settings = store:Get().settings
+        local info = item and item.Info
+        local cooldown = type(info) == "table"
+                and (info.ShootCooldown or info.AttackCooldown or info.ChargeReleaseCooldown)
+            or TRIGGER_INTERVAL
+        local planned = Rivals.applyAimRates(target, settings, random)
+        if settings.humanAim and planned and not planned.intentionalMiss then
+            local character = target.character
+            local head = character and character.FindFirstChild and character:FindFirstChild("Head")
+            if head then
+                planned = table.clone(planned)
+                planned.part = head
+                planned.position = head.Position
+            end
+        end
+        aimPlan = {
+            character = target.character,
+            expiresAt = now + math.max(TRIGGER_INTERVAL, cooldown or TRIGGER_INTERVAL),
+            item = item,
+            target = planned,
+        }
+        return planned
     end
 
     local function ricochetRaycast()
@@ -806,6 +1034,21 @@ function Rivals.new(context)
             end
         end
 
+        local cameraFrame = camera
+            and (camera.GetRenderCFrame and camera:GetRenderCFrame() or camera.CFrame)
+        local cameraPosition = cameraFrame and cameraFrame.Position
+        local nearby = {}
+        if cameraPosition then
+            for _, observation in ipairs(observations) do
+                if observation.position
+                    and (observation.position - cameraPosition).Magnitude <= MAX_OBSERVATION_DISTANCE
+                then
+                    table.insert(nearby, observation)
+                end
+            end
+        end
+        observations = nearby
+
         local visibleCount = 0
         for _, observation in ipairs(observations) do
             if observation.player ~= observation.character then
@@ -838,6 +1081,45 @@ function Rivals.new(context)
         return ("%s · %d enemies · %d visible"):format(phase, enemyCount, visibleCount)
     end
 
+    local function setAimRotation(rotation, instant, character)
+        local applied = rotation
+        if instant then
+            CameraController:SetRotation(rotation)
+            return true
+        end
+        local settings = store:Get().settings
+        local smoothness = settings.aimSmoothness
+        if settings.humanAim then
+            smoothness = math.max(smoothness, 55)
+            if humanAimCharacter ~= character then
+                humanAimCharacter = character
+                humanAimState = {
+                    curveSign = random() < 0.5 and -1 or 1,
+                }
+            end
+            applied = Rivals.humanRotation(
+                CameraController.Rotation,
+                rotation,
+                smoothness,
+                renderDelta,
+                humanAimState
+            )
+        else
+            humanAimCharacter = nil
+            humanAimState = nil
+            applied = Rivals.smoothRotation(
+                CameraController.Rotation,
+                rotation,
+                smoothness,
+                renderDelta
+            )
+        end
+        CameraController:SetRotation(applied)
+        local pitchError = math.abs(rotation.X - applied.X)
+        local yawError = math.abs((rotation.Y - applied.Y + math.pi) % (math.pi * 2) - math.pi)
+        return math.max(pitchError, yawError) <= math.rad(0.5)
+    end
+
     local function alignCamera()
         local settings = store:Get().settings
         if not settings.silentAim
@@ -854,7 +1136,14 @@ function Rivals.new(context)
         local knife = weaponName == "Knife"
         local slingshot = weaponName == "Slingshot"
         local splashProjectile = Rivals.isSplashProjectile(item)
-        local target = selectTarget(nil, energyRifle or slingshot or splashProjectile)
+        local entity = fighter and fighter.Entity
+        local localRoot = entity and entity.RootPart
+        local target
+        if knife then
+            target = localRoot and selectBackstabTarget(localRoot.Position, item.Info)
+        else
+            target = selectTarget(nil, energyRifle or slingshot or splashProjectile)
+        end
         local camera = Workspace.CurrentCamera
         if not target or not camera then
             return nil
@@ -864,23 +1153,20 @@ function Rivals.new(context)
         local origin = cameraFrame.Position
         local now = clock()
         if knife then
-            local entity = fighter and fighter.Entity
-            local localRoot = entity and entity.RootPart
-            if not target.visible
-                or not localRoot
-                or not Rivals.backstabReady(localRoot.Position, target, item.Info)
-            then
-                return nil
-            end
-
-            CameraController:SetRotation(Rivals.rotationToward(origin, target.position))
+            local aimSettled = setAimRotation(
+                Rivals.rotationToward(origin, target.position),
+                true,
+                target.character
+            )
             local aligned = {}
             for key, value in pairs(target) do
                 aligned[key] = value
             end
+            aligned.aimSettled = aimSettled
             aligned.backstab = true
             return aligned
         end
+        target = plannedAimTarget(target, item)
 
         if slingshot and target.position then
             local cacheValid = slingshotCache
@@ -905,13 +1191,16 @@ function Rivals.new(context)
             end
 
             if slingshotCache.solution then
-                CameraController:SetRotation(
-                    Rivals.rotationToward(origin, origin + slingshotCache.solution.direction)
+                local aimSettled = setAimRotation(
+                    Rivals.rotationToward(origin, origin + slingshotCache.solution.direction),
+                    false,
+                    target.character
                 )
                 local aligned = {}
                 for key, value in pairs(target) do
                     aligned[key] = value
                 end
+                aligned.aimSettled = aimSettled
                 aligned.slingshot = slingshotCache.solution
                 aligned.visible = true
                 return aligned
@@ -945,13 +1234,16 @@ function Rivals.new(context)
             end
 
             if splashCache.solution then
-                CameraController:SetRotation(
-                    Rivals.rotationToward(origin, origin + splashCache.solution.direction)
+                local aimSettled = setAimRotation(
+                    Rivals.rotationToward(origin, origin + splashCache.solution.direction),
+                    false,
+                    target.character
                 )
                 local aligned = {}
                 for key, value in pairs(target) do
                     aligned[key] = value
                 end
+                aligned.aimSettled = aimSettled
                 aligned.splashImpact = splashCache.solution
                 aligned.visible = true
                 return aligned
@@ -959,17 +1251,23 @@ function Rivals.new(context)
         else
             splashCache = nil
         end
+        if splashProjectile then
+            return nil
+        end
 
         if target.visible and Rivals.isDirectProjectile(item) then
             local solution = Rivals.solveProjectileAim(origin, target, item.Info, Workspace.Gravity)
             if solution then
-                CameraController:SetRotation(
-                    Rivals.rotationToward(origin, origin + solution.direction)
+                local aimSettled = setAimRotation(
+                    Rivals.rotationToward(origin, origin + solution.direction),
+                    false,
+                    target.character
                 )
                 local aligned = {}
                 for key, value in pairs(target) do
                     aligned[key] = value
                 end
+                aligned.aimSettled = aimSettled
                 aligned.projectileAim = solution
                 aligned.visible = true
                 return aligned
@@ -977,9 +1275,15 @@ function Rivals.new(context)
         end
 
         if target.visible then
-            CameraController:SetRotation(Rivals.rotationToward(origin, target.position))
+            local aimSettled = setAimRotation(
+                Rivals.rotationToward(origin, target.position),
+                false,
+                target.character
+            )
             ricochetCache = nil
-            return target
+            local aligned = table.clone(target)
+            aligned.aimSettled = aimSettled
+            return aligned
         end
         if not energyRifle or not target.position then
             return nil
@@ -1005,11 +1309,16 @@ function Rivals.new(context)
             return nil
         end
 
-        CameraController:SetRotation(Rivals.rotationToward(origin, origin + solution.direction))
+        local aimSettled = setAimRotation(
+            Rivals.rotationToward(origin, origin + solution.direction),
+            false,
+            target.character
+        )
         local aligned = {}
         for key, value in pairs(target) do
             aligned[key] = value
         end
+        aligned.aimSettled = aimSettled
         aligned.ricochet = solution
         aligned.visible = true
         return aligned
@@ -1020,12 +1329,16 @@ function Rivals.new(context)
         if not settings.triggerBot
             or context.isInputCaptured()
             or not localFighterIsActive()
+            or not localFighterIsInCombat()
         then
             if triggerHeld then
                 context.aimRelease()
                 triggerHeld = false
                 triggerHeldItem = nil
             end
+            return
+        end
+        if alignedTarget and alignedTarget.aimSettled == false then
             return
         end
 
@@ -1045,7 +1358,25 @@ function Rivals.new(context)
 
         local fighter = FighterController.LocalFighter
         local item = fighter and fighter.EquippedItem
-        if Rivals.itemName(item) == "Knife" and not (alignedTarget and alignedTarget.backstab) then
+        if Rivals.isSplashProjectile(item)
+            and not (alignedTarget and alignedTarget.splashImpact)
+        then
+            return
+        end
+        if Rivals.itemName(item) == "Knife" then
+            if not (alignedTarget and alignedTarget.backstab) then
+                return
+            end
+            if triggerHeld then
+                context.aimRelease()
+                triggerHeld = false
+                triggerHeldItem = nil
+            end
+            if clock() < nextTriggerAt then
+                return
+            end
+            nextTriggerAt = clock() + (item.Info.HeavyAttackCooldown or TRIGGER_INTERVAL)
+            context.aimClick()
             return
         end
         if item and item.Name == "Bow" and type(item.Info) == "table" then
@@ -1056,6 +1387,7 @@ function Rivals.new(context)
                 if Rivals.bowQuickShotLethal(item, target) then
                     nextTriggerAt = clock() + (item.Info.ShootCooldown or TRIGGER_INTERVAL)
                     context.click()
+                    aimPlan = nil
                     return
                 end
                 triggerHeld = true
@@ -1079,6 +1411,7 @@ function Rivals.new(context)
             triggerHeld = false
             triggerHeldItem = nil
             nextTriggerAt = clock() + (item.Info.ChargeReleaseCooldown or TRIGGER_INTERVAL)
+            aimPlan = nil
             return
         end
 
@@ -1093,11 +1426,15 @@ function Rivals.new(context)
 
         nextTriggerAt = clock() + TRIGGER_INTERVAL
         context.click()
+        aimPlan = nil
     end
 
-    local renderConnection = RunService.RenderStepped:Connect(function()
+    local renderConnection = RunService.RenderStepped:Connect(function(deltaTime)
         if stopped then
             return
+        end
+        if type(deltaTime) == "number" and deltaTime > 0 then
+            renderDelta = deltaTime
         end
 
         local visibleCount = updateObservations()

@@ -60,6 +60,16 @@ function Session:setFov(value)
     })
 end
 
+function Session:setRate(name, value)
+    assert(
+        name == "aimSmoothness" or name == "headshotRate" or name == "missRate",
+        "Unknown hub rate: " .. tostring(name)
+    )
+    self:patchSettings({
+        [name] = math.clamp(math.round(value), 0, 100),
+    })
+end
+
 function Session:setCosmeticsOpen(open)
     self.store:Patch({
         cosmeticsOpen = open == true,

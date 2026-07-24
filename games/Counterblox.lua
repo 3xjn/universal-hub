@@ -162,6 +162,8 @@ function Counterblox.new(context)
     local Bullet = loadModule(ReplicatedStorage.Components.Weapon.Classes.Bullet)
     local Melee = loadModule(ReplicatedStorage.Components.Melee)
     local CameraController = loadModule(ReplicatedStorage.Controllers.CameraController)
+    local CrosshairSettings =
+        loadModule(ReplicatedStorage.Interface.Screens.Gameplay.Middle.Crosshair.Settings)
     local GetRayIgnore = loadModule(ReplicatedStorage.Components.Common.GetRayIgnore)
     local GameRaycast = loadModule(ReplicatedStorage.Shared.Raycast)
     local CharacterClass = loadModule(ReplicatedStorage.Classes.Character)
@@ -196,6 +198,7 @@ function Counterblox.new(context)
     local nextTriggerAt = 0
     local noFlashApplied = false
     local noSmokeApplied = false
+    local followRecoil = CrosshairSettings["Follow Recoil"]
     local bhopRoot
     local bhopMomentum
     local bhopSpeedLimit
@@ -704,13 +707,14 @@ function Counterblox.new(context)
     local function directedBulletRaycast(bullet, spread)
         local settings = store:Get().settings
         local result = hooks.bulletOriginal(bullet, settings.noSpread and 0 or spread)
-        if not settings.silentAim then
+        local target = currentTarget
+        currentTarget = nil
+        if not settings.silentAim and not target then
             return result
         end
 
         local wallbangActive = settings.silentAim and settings.wallbang
-        local target = currentTarget or selectTarget(wallbangActive)
-        currentTarget = nil
+        target = target or selectTarget(wallbangActive)
         if not target or not result or not result.Origin then
             store:Patch({ lastShot = "No target" })
             return result
@@ -764,6 +768,14 @@ function Counterblox.new(context)
             return nil
         end
         return hooks.recoilOriginal(...)
+    end)
+
+    hooks.weaponRecoilTarget = CameraController.setWeaponRecoil
+    hooks.weaponRecoilOriginal = hookFunction(hooks.weaponRecoilTarget, function(...)
+        if not stopped and store:Get().settings.noRecoil then
+            return nil
+        end
+        return hooks.weaponRecoilOriginal(...)
     end)
 
     hooks.cameraUpdateTarget = CameraController.updateCamera
@@ -1068,13 +1080,14 @@ function Counterblox.new(context)
         if not target then
             return
         end
-        if not targetVisible(target)
-            and not (settings.silentAim and settings.wallbang and penetrationAccepted(target))
-        then
+        if not targetVisible(target) and not (settings.silentAim and settings.wallbang) then
+            return
+        end
+        if not penetrationAccepted(target) then
             return
         end
 
-        currentTarget = settings.silentAim and target or nil
+        currentTarget = target
         nextTriggerAt = os.clock() + 0.1
         click()
     end
@@ -1236,6 +1249,11 @@ function Counterblox.new(context)
     end
 
     local function updateSuppressions(settings)
+        if settings.noRecoil then
+            CrosshairSettings["Follow Recoil"] = false
+        else
+            CrosshairSettings["Follow Recoil"] = followRecoil
+        end
         if settings.noFlash and not noFlashApplied then
             FlashEffect.CancelFlash()
         end
@@ -1292,6 +1310,7 @@ function Counterblox.new(context)
         elseif movementConnection then
             movementConnection:Disconnect()
         end
+        CrosshairSettings["Follow Recoil"] = followRecoil
         restoreSpin()
         restoreFunction(hooks.meleeTarget)
         restoreFunction(hooks.spherecastTarget)
@@ -1302,6 +1321,7 @@ function Counterblox.new(context)
         restoreFunction(hooks.smokeTarget)
         restoreFunction(hooks.flashTarget)
         restoreFunction(hooks.cameraUpdateTarget)
+        restoreFunction(hooks.weaponRecoilTarget)
         restoreFunction(hooks.recoilTarget)
         restoreFunction(hooks.spreadUpdateTarget)
         restoreFunction(hooks.spreadTarget)
@@ -1322,6 +1342,7 @@ function Counterblox.new(context)
         "noSmoke",
         "noWeaponSlow",
         "boxes",
+        "chams",
         "names",
         "health",
         "weapon",
