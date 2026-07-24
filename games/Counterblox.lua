@@ -158,19 +158,11 @@ function Counterblox.new(context)
     local Workspace = game:GetService("Workspace")
     local LocalPlayer = Players.LocalPlayer
 
-    local requireModule: ((any) -> any)? = context.requireModule
-    if not requireModule and type(getrenv) == "function" then
-        local success, gameEnvironment = pcall(getrenv)
-        if success and type(gameEnvironment) == "table" and type(gameEnvironment.require) == "function" then
-            requireModule = gameEnvironment.require
-        end
-    end
-    local loadModule: (any) -> any = requireModule or require
+    local loadModule: (any) -> any = context.requireModule or require
     local Bullet = loadModule(ReplicatedStorage.Components.Weapon.Classes.Bullet)
     local Melee = loadModule(ReplicatedStorage.Components.Melee)
     local CameraController = loadModule(ReplicatedStorage.Controllers.CameraController)
     local GetRayIgnore = loadModule(ReplicatedStorage.Components.Common.GetRayIgnore)
-    local GetWeaponProperties = loadModule(ReplicatedStorage.Components.Common.GetWeaponProperties)
     local GameRaycast = loadModule(ReplicatedStorage.Shared.Raycast)
     local CharacterClass = loadModule(ReplicatedStorage.Classes.Character)
     local FlashEffect = loadModule(ReplicatedStorage.Components.Common.VFXLibary.FlashEffect)
@@ -307,6 +299,68 @@ function Counterblox.new(context)
         return targeting.nearestPlayer(options)
     end
 
+    local meleeNameHints = {
+        "bayonet",
+        "bowie",
+        "butterfly",
+        "dagger",
+        "falchion",
+        "flip",
+        "gut",
+        "huntsman",
+        "karambit",
+        "knife",
+        "kukri",
+        "navaja",
+        "nomad",
+        "paracord",
+        "shadow",
+        "skeleton",
+        "stiletto",
+        "survival",
+        "talon",
+        "ursus",
+    }
+
+    local function weaponClassFromAsset(asset)
+        if type(asset.GetAttribute) == "function" then
+            for _, attributeName in ipairs({ "Class", "WeaponClass", "Type" }) do
+                local value = asset:GetAttribute(attributeName)
+                if type(value) == "string" then
+                    return value
+                end
+            end
+        end
+        if type(asset.FindFirstChild) == "function" then
+            for _, childName in ipairs({ "Class", "WeaponClass", "Type" }) do
+                local child = asset:FindFirstChild(childName)
+                if child and type(child.Value) == "string" then
+                    return child.Value
+                end
+            end
+        end
+
+        local name = asset.Name:lower()
+        if name:find("glove", 1, true) or name:find("hand wrap", 1, true) then
+            return "Glove"
+        end
+        for _, hint in ipairs(meleeNameHints) do
+            if name:find(hint, 1, true) then
+                return "Melee"
+            end
+        end
+        return nil
+    end
+
+    local function weaponClass(weaponName)
+        for _, asset in ipairs(ReplicatedStorage.Assets.Weapons:GetChildren()) do
+            if asset.Name == weaponName then
+                return weaponClassFromAsset(asset)
+            end
+        end
+        return weaponClassFromAsset({ Name = weaponName })
+    end
+
     local function cosmeticCatalog(weaponName)
         local cached = cosmeticCatalogCache[weaponName]
         if cached then
@@ -314,12 +368,10 @@ function Counterblox.new(context)
         end
 
         local weaponNames = { weaponName }
-        local properties = GetWeaponProperties(weaponName)
-        if properties and properties.Class == "Melee" then
+        if weaponClass(weaponName) == "Melee" then
             local alternatives = {}
             for _, weapon in ipairs(ReplicatedStorage.Assets.Weapons:GetChildren()) do
-                local alternative = GetWeaponProperties(weapon.Name)
-                if weapon.Name ~= weaponName and alternative and alternative.Class == "Melee" then
+                if weapon.Name ~= weaponName and weaponClassFromAsset(weapon) == "Melee" then
                     table.insert(alternatives, weapon.Name)
                 end
             end
@@ -371,8 +423,7 @@ function Counterblox.new(context)
 
         local gloveNames = {}
         for _, weapon in ipairs(ReplicatedStorage.Assets.Weapons:GetChildren()) do
-            local properties = GetWeaponProperties(weapon.Name)
-            if properties and properties.Class == "Glove" then
+            if weaponClassFromAsset(weapon) == "Glove" then
                 table.insert(gloveNames, weapon.Name)
             end
         end

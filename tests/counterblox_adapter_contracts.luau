@@ -474,7 +474,6 @@ local moduleValues = {
     [characterModule] = characterModule,
     [flashEffect] = flashEffect,
     [getRayIgnore] = getRayIgnore,
-    [getWeaponProperties] = getWeaponProperties,
     [gameRaycast] = gameRaycast,
     [meleeModule] = meleeModule,
     [skinsModule] = skinsModule,
@@ -513,6 +512,10 @@ local initialized, adapter = pcall(Counterblox.new, {
     end,
     movementDirection = function()
         return movementDirection
+    end,
+    requireModule = function(module)
+        table.insert(requiredModules, module)
+        return assert(moduleValues[module], "unexpected game module requirement")
     end,
     oh = {
         targeting = {
@@ -1056,6 +1059,10 @@ assert(clickCount == clicksBeforeKnifeRangeCheck, "Micro Step must not attack un
 assert(moduleValues[inventoryController] == nil)
 for _, module in ipairs(requiredModules) do
     assert(module ~= inventoryController, "Counterblox adapter must not require InventoryController")
+    assert(
+        module ~= getWeaponProperties,
+        "Cosmetic discovery must not load GetWeaponProperties because Potassium cannot execute its nested requires"
+    )
 end
 adapter:stop()
 print("counterblox-adapter-contracts-ok")
