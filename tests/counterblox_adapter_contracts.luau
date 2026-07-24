@@ -223,6 +223,18 @@ local viewmodelModule = {
 weaponComponentModule.Classes = {
     Viewmodel = viewmodelModule,
 }
+local cosmeticSkinReads = 0
+local function countedSkin(schema, skin)
+    return setmetatable(schema, {
+        __index = function(_, key)
+            if key == "skin" then
+                cosmeticSkinReads += 1
+                return skin
+            end
+            return nil
+        end,
+    })
+end
 local skinsModule = {
     GetGloves = function(name, skin, wear)
         return {
@@ -235,11 +247,16 @@ local skinsModule = {
         if name == "AK-47" then
             return {
                 {
-                    floatRange = { min = 0, max = 0.15 },
-                    name = "AK-47",
-                    skin = "PinPoint",
+                    floatRange = { min = 0, max = 0.7 },
+                    name = "M4A1",
+                    skin = "Irradiated",
                     supportsStatTrak = true,
                 },
+                countedSkin({
+                    floatRange = { min = 0, max = 0.15 },
+                    name = "AK-47",
+                    supportsStatTrak = true,
+                }, "PinPoint"),
             }
         elseif name == "Karambit" then
             return {
@@ -645,8 +662,39 @@ assert(
     hookImplementations[skinsModule.GetGloves] == nil,
     "Glove changer must not hook global GetGloves because that leaks the override to every player"
 )
+adapterState.settings.skinOverrides["AK-47"] = {
+    skin = "Irradiated",
+    statTrak = false,
+    wear = 0.2,
+    weapon = "AK-47",
+}
+hookImplementations[weaponComponentModule.new](
+    localPlayer,
+    "stale-identifier",
+    "stale-id",
+    "Primary",
+    "AK-47",
+    "Stock",
+    0,
+    false,
+    nil,
+    nil,
+    nil,
+    nil
+)
+assert(
+    weaponNewArguments[6] == "Stock",
+    "A stale unsupported skin override must not be applied to a newly constructed weapon"
+)
+adapterState.settings.skinOverrides["AK-47"] = nil
 adapter:cycleSkin(1)
 assert(adapterState.settings.skinOverrides["AK-47"].skin == "PinPoint")
+local skinReadsAfterPublish = cosmeticSkinReads
+renderCallback()
+assert(
+    cosmeticSkinReads == skinReadsAfterPublish,
+    "An unchanged equipped weapon must not rescan its cosmetic catalog every render frame"
+)
 assert(
     existingLiveComponent.Viewmodel.ModelName == "AK-47"
         and existingLiveComponent.Viewmodel.IsEquipped == true

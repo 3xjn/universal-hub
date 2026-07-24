@@ -207,6 +207,7 @@ function Counterblox.new(context)
     local lastCosmeticKey
     local lastGloveKey
     local cosmeticCatalogCache = {}
+    local cosmeticOverrideCache = {}
     local gloveCatalogCache
     local trackedComponents = setmetatable({}, { __mode = "k" })
     local characterTransparency = setmetatable({}, { __mode = "k" })
@@ -393,7 +394,10 @@ function Counterblox.new(context)
                 weapon = cosmeticWeapon,
             })
             for _, source in ipairs(Skins.GetAllSkinsForWeapon(cosmeticWeapon) or {}) do
-                if source.skin ~= "Stock" then
+                local sourceWeapon = source.weapon or source.name
+                if source.skin ~= "Stock"
+                    and (type(sourceWeapon) ~= "string" or sourceWeapon == cosmeticWeapon)
+                then
                     local schema = table.clone(source)
                     schema.weapon = cosmeticWeapon
                     table.insert(catalog, schema)
@@ -416,7 +420,28 @@ function Counterblox.new(context)
     local function cosmeticOverride(weaponName)
         local settings = store:Get().settings
         local overrides = settings.skinOverrides
-        return overrides and overrides[weaponName]
+        local override = overrides and overrides[weaponName]
+        local cached = cosmeticOverrideCache[weaponName]
+        if cached and cached.source == override then
+            return cached.value or nil
+        end
+
+        local validOverride
+        if type(override) == "table" then
+            for _, schema in ipairs(cosmeticCatalog(weaponName)) do
+                if schema.skin == override.skin
+                    and (not override.weapon or schema.weapon == override.weapon)
+                then
+                    validOverride = override
+                    break
+                end
+            end
+        end
+        cosmeticOverrideCache[weaponName] = {
+            source = override,
+            value = validOverride or false,
+        }
+        return validOverride
     end
 
     local function gloveCatalog()
@@ -542,20 +567,19 @@ function Counterblox.new(context)
             wear = 0,
             weapon = weaponName,
         }
-        local schema, index = cosmeticSchema(weaponName, override.skin, override.weapon)
-        local range = schema.floatRange or { min = 0, max = 1 }
-        local catalog = cosmeticCatalog(weaponName)
         local key = table.concat({
             weaponName,
             override.weapon or weaponName,
             override.skin,
             tostring(override.wear),
             tostring(override.statTrak),
-            tostring(#catalog),
         }, "|")
         if key == lastCosmeticKey then
             return
         end
+        local schema, index = cosmeticSchema(weaponName, override.skin, override.weapon)
+        local range = schema.floatRange or { min = 0, max = 1 }
+        local catalog = cosmeticCatalog(weaponName)
         lastCosmeticKey = key
         store:Patch({
             cosmetics = {
