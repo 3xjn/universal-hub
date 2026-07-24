@@ -1,7 +1,7 @@
 local environment = assert(getgenv, "<UH> ~ Your executor is not supported")()
 local configuration = environment.UniversalHubConfig or {}
 local sourceRoot = configuration.SourceBaseUrl
-    or "https://raw.githubusercontent.com/3xjn/universal-hub/main/"
+    or "https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/"
 type HttpGame = typeof(game) & {
     HttpGet: (self: typeof(game), url: string) -> string,
 }

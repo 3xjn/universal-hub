@@ -5,7 +5,7 @@ A game-adapter hub powered by Hydroxide's reusable modules. The hub owns shared 
 ## Load
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/3xjn/universal-hub/main/loader.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/loader.lua"))()
 ```
 
 The loader supports Volt and Potassium and fetches the current `main` branch. Press `Right Shift` to hide or restore the menu.
