@@ -1101,13 +1101,6 @@ function Overlay:_syncBodyPartNodes(nodes, count)
     while #nodes.bodyParts < count do
         local cube = {
             faces = {},
-            outline = self.surface:create("Square", {
-                Color = COLORS.danger,
-                Filled = false,
-                Thickness = 1.5,
-                Visible = false,
-                ZIndex = 61,
-            }, { pointerEvents = false }),
         }
         if self.optionSupport.chams ~= false then
             for _faceIndex = 1, #BODY_CUBE_FACES do
@@ -1154,20 +1147,12 @@ function Overlay:render(observations, mousePosition)
             for index, bodyPart in ipairs(bodyParts) do
                 local cube = nodes.bodyParts[index]
                 local corners = bodyPart.corners
-                local partBounds = bodyPart.bounds
-                local outlineVisible = settings.boxes == true and type(partBounds) == "table"
                 local cubeVisible = settings.chams == true
                     and self.optionSupport.chams ~= false
                     and type(corners) == "table"
                     and #corners == 8
                 local cubeColor = bodyPart.visible == true and COLORS.accent or COLORS.danger
 
-                if outlineVisible then
-                    cube.outline.Position = partBounds.position
-                    cube.outline.Size = partBounds.size
-                end
-                cube.outline.Color = cubeColor
-                cube.outline.Visible = outlineVisible
                 for faceIndex, cornerIndices in ipairs(BODY_CUBE_FACES) do
                     local face = cube.faces[faceIndex]
                     if face and cubeVisible then
@@ -1186,7 +1171,7 @@ function Overlay:render(observations, mousePosition)
             nodes.box.Position = bounds.position
             nodes.box.Size = bounds.size
             nodes.box.Color = color
-            nodes.box.Visible = settings.boxes == true and #bodyParts == 0
+            nodes.box.Visible = settings.boxes == true
 
             nodes.name.Position = Vector2.new(bounds.position.X + bounds.size.X * 0.5, bounds.position.Y - 15)
             nodes.name.Text = observation.player.Name
