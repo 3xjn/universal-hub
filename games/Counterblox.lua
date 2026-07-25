@@ -36,6 +36,14 @@ function Counterblox.match(context)
     return 0
 end
 
+function Counterblox.cosmeticLabel(skin)
+    local base, pattern = string.match(skin, "^(.-)_PATTERN_(%d+)$")
+    if base then
+        return ("%s (Pattern %s)"):format(base, pattern)
+    end
+    return skin
+end
+
 local function targetVisible(target)
     if target.visible ~= nil then
         return target.visible == true
@@ -271,6 +279,16 @@ function Counterblox.new(context)
             and (subject == character or subject.Parent == character or subject:IsDescendantOf(character))
     end
 
+    local function spectatedPlayer()
+        local camera = Workspace.CurrentCamera
+        local subject = camera and camera.CameraSubject
+        if not subject then
+            return nil
+        end
+        return Players:GetPlayerFromCharacter(subject)
+            or subject.Parent and Players:GetPlayerFromCharacter(subject.Parent)
+    end
+
     local function isOpponent(player, character)
         if player == LocalPlayer or not character or character:GetAttribute("Dead") == true then
             return false
@@ -279,7 +297,8 @@ function Counterblox.new(context)
             return false
         end
 
-        local localTeam = LocalPlayer:GetAttribute("Team")
+        local referencePlayer = spectatedPlayer() or LocalPlayer
+        local localTeam = referencePlayer:GetAttribute("Team")
         local playerTeam = player:GetAttribute("Team")
         local gameMode = Workspace:GetAttribute("Gamemode")
         local serverGameMode = Workspace:GetAttribute("ServerGamemode")
@@ -589,6 +608,7 @@ function Counterblox.new(context)
                 maximumWear = range.max or 1,
                 minimumWear = range.min or 0,
                 skin = override.skin,
+                skinLabel = Counterblox.cosmeticLabel(override.skin),
                 skinCount = #catalog,
                 skinIndex = index,
                 statTrak = override.statTrak == true,

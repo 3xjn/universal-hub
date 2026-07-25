@@ -1015,7 +1015,7 @@ function Overlay:_renderState(state)
         cosmeticMode == "weapon" and (cosmetics.weapon or "Weapon") or "Weapons"
     cosmeticControls.gloveModeLabel.Text =
         cosmeticMode == "gloves" and (cosmetics.weapon or "Gloves") or "Gloves"
-    cosmeticControls.skinName.Text = cosmetics.skin or "Stock"
+    cosmeticControls.skinName.Text = cosmetics.skinLabel or cosmetics.skin or "Stock"
     cosmeticControls.wearValue.Text = ("%.2f"):format(cosmetics.wear or 0)
     cosmeticControls.wearFill.Size = Vector2.new(276 * wearAlpha, 4)
     cosmeticControls.wearKnob.Position =

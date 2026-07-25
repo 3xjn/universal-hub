@@ -38,7 +38,8 @@ local store = Store.new({
     cosmetics = {
         maximumWear = 0.15,
         minimumWear = 0,
-        skin = "PinPoint",
+        skin = "Nebula_PATTERN_11",
+        skinLabel = "Nebula (Pattern 11)",
         skinCount = 8,
         skinIndex = 2,
         statTrak = true,
@@ -280,7 +281,10 @@ overlay.controls.cosmetics.header.callbacks.click()
 assert(cosmeticsVisibilityChanges[1] == true)
 store:Patch({ cosmeticsOpen = true })
 assert(overlay.controls.panel.Size.Y == 826)
-assert(overlay.controls.cosmetics.skinName.Text == "PinPoint")
+assert(
+    overlay.controls.cosmetics.skinName.Text == "Nebula (Pattern 11)",
+    "Cosmetic controls must show the readable variant label without replacing its raw ID"
+)
 assert(overlay.controls.cosmetics.weaponModeLabel.Text == "AK-47")
 assert(overlay.controls.cosmetics.gloveModeLabel.Text == "Gloves")
 assert(overlay.controls.cosmetics.weaponMode.Color == Color3.fromRGB(23, 53, 45))

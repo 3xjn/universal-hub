@@ -279,6 +279,18 @@ local skinsModule = {
                     skin = "Fade",
                     supportsStatTrak = true,
                 },
+                {
+                    floatRange = { min = 0, max = 0.08 },
+                    name = "Karambit",
+                    skin = "Nebula_PATTERN_1",
+                    supportsStatTrak = true,
+                },
+                {
+                    floatRange = { min = 0, max = 0.08 },
+                    name = "Karambit",
+                    skin = "Nebula_PATTERN_2",
+                    supportsStatTrak = true,
+                },
             }
         elseif name == "T Knife" then
             return {}
@@ -410,6 +422,8 @@ local localPlayer = {
         return nil
     end,
 }
+local spectatedCharacter
+local spectatedPlayer
 local existingViewmodelDestroyCalls = 0
 local existingLiveComponent = {
     Float = 0,
@@ -435,6 +449,12 @@ local encodedGloveValue
 local services = {
     Players = {
         LocalPlayer = localPlayer,
+        GetPlayerFromCharacter = function(_, character)
+            if character == spectatedCharacter then
+                return spectatedPlayer
+            end
+            return nil
+        end,
     },
     HttpService = {
         JSONDecode = function()
@@ -605,7 +625,7 @@ local initialized, adapter = pcall(Counterblox.new, {
         Get = function()
             return adapterState
         end,
-        Patch = function(patch)
+        Patch = function(_, patch)
             local function merge(target, source)
                 for key, value in pairs(source) do
                     if type(value) == "table" and type(target[key]) == "table" then
@@ -662,8 +682,33 @@ assert(
     adapter.isOpponent(sameTeamPlayer, livingCharacter) == false,
     "ESP must exclude the character currently followed by the spectating camera"
 )
-currentCamera.CameraSubject = nil
 gameMode = "Competitive"
+spectatedCharacter = {}
+spectatedPlayer = {
+    GetAttribute = function(_, name)
+        return name == "Team" and "CT" or nil
+    end,
+}
+currentCamera.CameraSubject = {
+    Parent = spectatedCharacter,
+    IsDescendantOf = function(_, ancestor)
+        return ancestor == spectatedCharacter
+    end,
+}
+assert(
+    adapter.isOpponent(sameTeamPlayer, livingCharacter) == true,
+    "Spectator ESP must classify opponents relative to the followed player's team"
+)
+local spectatedAllyPlayer = {
+    GetAttribute = function(_, name)
+        return name == "Team" and "CT" or nil
+    end,
+}
+assert(
+    adapter.isOpponent(spectatedAllyPlayer, livingCharacter) == false,
+    "Spectator ESP must exclude allies of the followed player"
+)
+currentCamera.CameraSubject = nil
 assert(
     hookImplementations[bulletModule.getTrueSpread],
     "No Spread must hook Bullet.getTrueSpread, the value consumed before raycast"
@@ -772,6 +817,44 @@ local knifeComponent = hookImplementations[weaponComponentModule.new](
 assert(weaponNewArguments[5] == "T Knife", "Knife cosmetics must preserve the server-backed weapon identity")
 assert(knifeComponent.Name == "T Knife")
 assert(viewmodelNewArguments.name == "Karambit" and viewmodelNewArguments.skin == "Stock")
+
+adapter:cycleSkin(1)
+adapter:cycleSkin(1)
+local patternedKnifeOverride = adapterState.settings.skinOverrides["T Knife"]
+assert(
+    patternedKnifeOverride.skin == "Nebula_PATTERN_1",
+    "Knife pattern variants must retain the game's exact skin identifier"
+)
+assert(
+    adapterState.cosmetics.skin == "Nebula_PATTERN_1"
+        and adapterState.cosmetics.skinLabel == "Nebula (Pattern 1)",
+    "Published cosmetics must keep the raw identifier separate from its readable label"
+)
+hookImplementations[weaponComponentModule.new](
+    localPlayer,
+    "patterned-knife-identifier",
+    "patterned-knife-id",
+    3,
+    "T Knife",
+    "Stock",
+    0,
+    false,
+    nil,
+    nil,
+    nil,
+    nil
+)
+assert(
+    viewmodelNewArguments.name == "Karambit"
+        and viewmodelNewArguments.skin == "Nebula_PATTERN_1",
+    "The viewmodel must receive the exact numbered pattern rather than its display label"
+)
+adapter:cycleSkin(1)
+assert(
+    adapterState.settings.skinOverrides["T Knife"].skin == "Nebula_PATTERN_2"
+        and adapterState.cosmetics.skinLabel == "Nebula (Pattern 2)",
+    "Adjacent numbered patterns must remain distinct selectable cosmetics"
+)
 adapterState.activeWeapon = "AK-47"
 
 adapter:cycleGlove(1)
