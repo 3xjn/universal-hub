@@ -115,13 +115,23 @@ local cosmeticsVisibilityChanges = {}
 local cosmeticActions = {}
 local cosmeticWeaponChanges = {}
 local guiInstances = {}
+local instanceThreadRestricted = false
 local function createInstance(className)
-    local instance = {
+    local properties = {
         ClassName = className,
         Destroyed = false,
     }
-    function instance:Destroy()
-        self.Destroyed = true
+    local instance = setmetatable({}, {
+        __index = properties,
+        __newindex = function(_, key, value)
+            if className == "BillboardGui" and key == "Adornee" and instanceThreadRestricted then
+                error("The current thread cannot access 'Instance' (lacking capability Plugin)")
+            end
+            properties[key] = value
+        end,
+    })
+    function properties.Destroy()
+        properties.Destroyed = true
     end
     table.insert(guiInstances, instance)
     return instance
@@ -248,20 +258,29 @@ assert(overlay.controls.rates.headshotRate.value.Text == "50%")
 assert(overlay.controls.rates.missRate.value.Text == "10%")
 assert(overlay.controls.rates.aimSmoothness.value.Text == "35%")
 local bombAdornee = {}
-store:Patch({
-    bombObservation = {
-        adornee = bombAdornee,
-        presentation = {
-            alwaysOnTop = true,
-            height = 30,
-            textSize = 13,
+instanceThreadRestricted = true
+local bombPatchSucceeded, bombPatchError = pcall(function()
+    store:Patch({
+        bombObservation = {
+            adornee = bombAdornee,
+            presentation = {
+                alwaysOnTop = true,
+                height = 30,
+                textSize = 13,
+                visible = true,
+                width = 92,
+            },
+            remaining = 37.4,
             visible = true,
-            width = 92,
         },
-        remaining = 37.4,
-        visible = true,
-    },
-})
+    })
+end)
+instanceThreadRestricted = false
+assert(
+    bombPatchSucceeded,
+    "Game-owned Store patches must not mutate the bomb BillboardGui: " .. tostring(bombPatchError)
+)
+overlay:render({}, Vector2.new(640, 360), {})
 assert(overlay.worldGui.billboard.Enabled and overlay.worldGui.billboard.Adornee == bombAdornee)
 assert(
     overlay.worldGui.title.Text == "BOMB"

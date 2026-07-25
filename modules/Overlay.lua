@@ -1076,7 +1076,6 @@ function Overlay:_renderState(state)
     controls.fovValue.Text = settings.fullScreenAim and "Fullscreen On" or "Fullscreen Off"
     controls.fovCircle.Radius = settings.fov
     controls.fovCircle.Visible = settings.fovCircle ~= false and not settings.fullScreenAim
-    self:_renderBomb(state.bombObservation, settings)
 
     local cosmeticMode = self.cosmeticMode
     local gloveColor = settings.gloveColorOverride
@@ -1438,7 +1437,9 @@ function Overlay:render(observations, mousePosition, utilityObservations)
     end
 
     self.observations = observations
-    local settings = self.context.store:Get().settings
+    local state = self.context.store:Get()
+    local settings = state.settings
+    self:_renderBomb(state.bombObservation, settings)
     self.controls.fovCircle.Position = mousePosition
     local seen = {}
 
