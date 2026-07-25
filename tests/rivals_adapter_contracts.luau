@@ -187,6 +187,42 @@ assert(
     Rivals.bowQuickShotLethal(similarCooldownBow, { health = 30, part = { Name = "Torso" } }) == false,
     "Bow should keep secondary fire when its uncharged release is similarly fast"
 )
+local shorty = {
+    Info = {
+        CriticalDamage = 112.5,
+        RaycastDamageDropoffEndDistance = 25,
+        RaycastDamageDropoffMultiplier = 0.333,
+        RaycastDamageDropoffStartDistance = 10,
+        ShootDamage = 75,
+    },
+}
+assert(
+    type(Rivals.damageAtDistance) == "function"
+        and type(Rivals.triggerDamageReady) == "function",
+    "Trigger Bot must expose a range-aware damage decision"
+)
+assert(Rivals.damageAtDistance(shorty, { part = { Name = "Torso" } }, 10) == 75)
+assert(math.abs(Rivals.damageAtDistance(shorty, { part = { Name = "Torso" } }, 25) - 24.975) < 1e-6)
+assert(
+    Rivals.triggerDamageReady(shorty, { health = 150, part = { Name = "Torso" } }, 20) == false,
+    "Trigger Bot must wait instead of wasting a severe-falloff body shot"
+)
+assert(
+    Rivals.triggerDamageReady(shorty, { health = 40, part = { Name = "Torso" } }, 20) == true,
+    "Trigger Bot must take a reduced-damage shot when it is still lethal"
+)
+assert(
+    Rivals.triggerDamageReady(shorty, { health = 60, part = { Name = "Head" } }, 20) == true,
+    "Trigger Bot must use critical damage when evaluating a lethal falloff shot"
+)
+assert(
+    Rivals.triggerDamageReady(shorty, { health = 150, part = { Name = "Torso" } }, 12) == true,
+    "Trigger Bot must accept near-full damage inside the useful falloff edge"
+)
+assert(
+    Rivals.triggerDamageReady({ Info = { ShootDamage = 12 } }, { health = 150 }, 200) == true,
+    "Weapons without falloff metadata must keep normal Trigger Bot behavior"
+)
 assert(Rivals.isSplashProjectile({
     Info = {
         DamageType = "Splash",
@@ -976,6 +1012,54 @@ cameraModule._fov_weapons_spring.Value = -49.75
 renderCallback()
 assert(clicks == 2, "Trigger Bot must fire once the scoped weapon finishes entering ADS")
 
+localItem.Name = "Shorty"
+localItem.Info = table.clone(shorty.Info)
+localItem.Info.DisplayName = "Shorty"
+localItem.Data = {}
+observations[1].position = origin + Vector3.new(20, 0, 0)
+currentTime += 1
+local falloffClicks = clicks
+renderCallback()
+assert(
+    clicks == falloffClicks,
+    "Trigger Bot must wait when a high-falloff shot is neither near-full damage nor lethal"
+)
+target.character.FindFirstChildOfClass = function(_self, className)
+    if className == "Humanoid" then
+        return {
+            Health = 40,
+            MaxHealth = 150,
+        }
+    end
+    return nil
+end
+currentTime += 1
+renderCallback()
+assert(clicks == falloffClicks + 1, "Trigger Bot must fire the same falloff shot once it becomes lethal")
+observations[1].position = targetPosition
+
+fighterModule.LocalFighter.Data.IsInShootingRange = false
+settings.silentAim = true
+settings.humanAim = true
+settings.aimSmoothness = 100
+cameraModule.Rotation = Rivals.rotationToward(origin, runtimeAimHead.Position)
+    + Vector2.new(0, math.rad(4))
+local humanShortyClicks = clicks
+for _ = 1, 3 do
+    currentTime += 0.125
+    runtimeAimHead.Position += Vector3.new(0.1, 0, 0)
+    renderCallback(1 / 60)
+end
+assert(
+    clicks == humanShortyClicks + 3,
+    "Human Aim Trigger Bot must keep firing Shorty while its imperfect tracking stays inside the reticle envelope"
+)
+fighterModule.LocalFighter.Data.IsInShootingRange = true
+settings.silentAim = false
+settings.humanAim = false
+settings.aimSmoothness = 0
+runtimeAimHead.Position = targetPosition + Vector3.new(0, 2, 0)
+
 localItem.Name = "Bow"
 localItem.Info = bow.Info
 localItem.Info.DisplayName = "Bow"
@@ -1103,15 +1187,21 @@ assert(
 inputCaptured = true
 settings.silentAim = true
 cameraModule.Rotation = Vector2.zero
+local capturedClicks = clicks
+local capturedPresses = presses
+local capturedReleases = releases
+local capturedAimPresses = aimPresses
+local capturedAimReleases = aimReleases
+local capturedAimClicks = aimClicks
 renderCallback()
 assert(cameraModule.Rotation == Vector2.zero, "The open menu must suppress camera control")
 assert(
-    clicks == 4
-        and presses == 0
-        and releases == 0
-        and aimPresses == 1
-        and aimReleases == 1
-        and aimClicks == 1,
+    clicks == capturedClicks
+        and presses == capturedPresses
+        and releases == capturedReleases
+        and aimPresses == capturedAimPresses
+        and aimReleases == capturedAimReleases
+        and aimClicks == capturedAimClicks,
     "The open menu must suppress automated input"
 )
 

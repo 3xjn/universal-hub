@@ -27,6 +27,7 @@ local Rivals = {
 
 local TRIGGER_INTERVAL = 0.1
 local TRIGGER_RADIUS = 8
+local TRIGGER_DAMAGE_RETENTION = 0.9
 local MAX_OBSERVATION_DISTANCE = 2000
 local RICOCHET_BOUNCES = 2
 local RICOCHET_CACHE_INTERVAL = 0.15
@@ -712,6 +713,50 @@ function Rivals.adsSettled(cameraController, item)
         and math.abs(spring.Value - spring.Target) <= 0.5
 end
 
+function Rivals.damageAtDistance(item, observation, distance)
+    local info = item and item.Info
+    local startDistance = info and info.RaycastDamageDropoffStartDistance
+    local endDistance = info and info.RaycastDamageDropoffEndDistance
+    local minimumMultiplier = info and info.RaycastDamageDropoffMultiplier
+    local part = observation and observation.part
+    local baseDamage = part and part.Name == "Head" and info and info.CriticalDamage
+        or info and info.ShootDamage
+    if type(baseDamage) ~= "number" then
+        return nil
+    end
+    if type(startDistance) ~= "number"
+        or type(endDistance) ~= "number"
+        or endDistance <= startDistance
+        or type(minimumMultiplier) ~= "number"
+        or type(distance) ~= "number"
+    then
+        return baseDamage
+    end
+
+    local alpha = math.clamp((distance - startDistance) / (endDistance - startDistance), 0, 1)
+    return baseDamage * (1 + (minimumMultiplier - 1) * alpha)
+end
+
+function Rivals.triggerDamageReady(item, observation, distance)
+    local info = item and item.Info
+    if type(info) ~= "table"
+        or type(info.RaycastDamageDropoffStartDistance) ~= "number"
+        or type(info.RaycastDamageDropoffEndDistance) ~= "number"
+        or type(info.RaycastDamageDropoffMultiplier) ~= "number"
+    then
+        return true
+    end
+
+    local part = observation and observation.part
+    local baseDamage = part and part.Name == "Head" and info.CriticalDamage or info.ShootDamage
+    local damage = Rivals.damageAtDistance(item, observation, distance)
+    local health = observation and observation.health
+    return type(baseDamage) == "number"
+        and type(damage) == "number"
+        and (damage >= baseDamage * TRIGGER_DAMAGE_RETENTION
+            or type(health) == "number" and damage >= health)
+end
+
 function Rivals.bowChargeTime(item, observation)
     local info = item and item.Info
     local timestamps = info and info.ChargeLevelTimestamps
@@ -1339,7 +1384,15 @@ function Rivals.new(context)
             return
         end
         if alignedTarget and alignedTarget.aimSettled == false then
-            return
+            local humanReticleReady = settings.humanAim
+                and (alignedTarget.screenDistance or math.huge) <= TRIGGER_RADIUS
+                and not alignedTarget.ricochet
+                and not alignedTarget.slingshot
+                and not alignedTarget.splashImpact
+                and not alignedTarget.projectileAim
+            if not humanReticleReady then
+                return
+            end
         end
 
         local target = alignedTarget or selectTarget(TRIGGER_RADIUS)
@@ -1377,6 +1430,15 @@ function Rivals.new(context)
             end
             nextTriggerAt = clock() + (item.Info.HeavyAttackCooldown or TRIGGER_INTERVAL)
             context.aimClick()
+            return
+        end
+        local camera = Workspace.CurrentCamera
+        local cameraFrame = camera
+            and (camera.GetRenderCFrame and camera:GetRenderCFrame() or camera.CFrame)
+        local targetDistance = cameraFrame
+            and target.position
+            and (target.position - cameraFrame.Position).Magnitude
+        if targetDistance and not Rivals.triggerDamageReady(item, target, targetDistance) then
             return
         end
         if item and item.Name == "Bow" and type(item.Info) == "table" then
