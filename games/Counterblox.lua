@@ -219,7 +219,9 @@ function Counterblox.new(context)
     local lastGloveKey
     local cosmeticCatalogCache = {}
     local cosmeticOverrideCache = {}
+    local cosmeticWeaponCache
     local gloveCatalogCache
+    local selectedCosmeticWeapon
     local trackedComponents = setmetatable({}, { __mode = "k" })
     local characterTransparency = setmetatable({}, { __mode = "k" })
     local viewmodelTransparency = setmetatable({}, { __mode = "k" })
@@ -385,6 +387,28 @@ function Counterblox.new(context)
             end
         end
         return weaponClassFromAsset({ Name = weaponName })
+    end
+
+    local function cosmeticWeapons()
+        if cosmeticWeaponCache then
+            return cosmeticWeaponCache
+        end
+
+        local weapons = {}
+        for _, asset in ipairs(ReplicatedStorage.Assets.Weapons:GetChildren()) do
+            local class = weaponClassFromAsset(asset)
+            local isBaseMelee = asset.Name == "T Knife" or asset.Name == "CT Knife"
+            if class ~= "Glove" and (class ~= "Melee" or isBaseMelee) then
+                table.insert(weapons, asset.Name)
+            end
+        end
+        table.sort(weapons)
+        cosmeticWeaponCache = weapons
+        return weapons
+    end
+
+    local function currentCosmeticWeapon()
+        return selectedCosmeticWeapon or store:Get().activeWeapon or lastEquippedName
     end
 
     local function cosmeticCatalog(weaponName)
@@ -1304,12 +1328,17 @@ function Counterblox.new(context)
             lastEquippedName = activeWeapon
             activeWeaponKind = equippedKind
         end
-        publishCosmetics(activeWeapon)
+        if not selectedCosmeticWeapon and activeWeapon then
+            selectedCosmeticWeapon = activeWeapon
+        end
+        local cosmeticWeapon = currentCosmeticWeapon()
+        publishCosmetics(cosmeticWeapon)
         publishGloves()
         local visibleCount = updateObservations()
         store:Patch({
             activeWeapon = activeWeapon,
             activeWeaponKind = activeWeaponKind,
+            cosmeticWeapon = cosmeticWeapon,
             observations = observations,
             status = ("%d enemies · %d visible"):format(#observations, visibleCount),
         })
@@ -1370,8 +1399,22 @@ function Counterblox.new(context)
     self.classify = Counterblox.classifyWeapon
     self.isOpponent = isOpponent
     self.selectTarget = selectTarget
+    function self:cycleCosmeticWeapon(direction)
+        local weapons = cosmeticWeapons()
+        if #weapons == 0 then
+            return
+        end
+        local index = table.find(weapons, currentCosmeticWeapon())
+        if not index then
+            index = direction > 0 and 0 or 1
+        end
+        selectedCosmeticWeapon = weapons[((index - 1 + direction) % #weapons) + 1]
+        lastCosmeticKey = nil
+        publishCosmetics(selectedCosmeticWeapon)
+        store:Patch({ cosmeticWeapon = selectedCosmeticWeapon })
+    end
     function self:cycleSkin(direction)
-        local weaponName = store:Get().activeWeapon or lastEquippedName
+        local weaponName = currentCosmeticWeapon()
         if not weaponName then
             return
         end
@@ -1388,7 +1431,7 @@ function Counterblox.new(context)
         setCosmetic(weaponName, schema, range.min, false)
     end
     function self:setWear(alpha)
-        local weaponName = store:Get().activeWeapon or lastEquippedName
+        local weaponName = currentCosmeticWeapon()
         local current = weaponName and cosmeticOverride(weaponName)
         if not weaponName or not current then
             return
@@ -1403,7 +1446,7 @@ function Counterblox.new(context)
         )
     end
     function self:toggleStatTrak()
-        local weaponName = store:Get().activeWeapon or lastEquippedName
+        local weaponName = currentCosmeticWeapon()
         local current = weaponName and cosmeticOverride(weaponName)
         if not weaponName or not current then
             return
@@ -1414,7 +1457,7 @@ function Counterblox.new(context)
         end
     end
     function self:resetSkin()
-        local weaponName = store:Get().activeWeapon or lastEquippedName
+        local weaponName = currentCosmeticWeapon()
         if weaponName then
             setCosmetic(weaponName, cosmeticCatalog(weaponName)[1], 0, false)
         end

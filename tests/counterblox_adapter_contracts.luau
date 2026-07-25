@@ -356,6 +356,7 @@ local replicatedStorage = {
         Weapons = {
             GetChildren = function()
                 return {
+                    { Name = "AK-47" },
                     { Name = "CT Glove" },
                     { Name = "Driver Gloves" },
                     { Name = "Karambit" },
@@ -795,7 +796,13 @@ adapter:resetSkin()
 assert(adapterState.settings.skinOverrides["AK-47"].skin == "Stock")
 assert(adapterState.settingsChanged == 4, "Every cosmetic change must request per-game persistence")
 
-adapterState.activeWeapon = "T Knife"
+adapter:cycleCosmeticWeapon(1)
+assert(
+    adapterState.activeWeapon == "AK-47"
+        and adapterState.cosmeticWeapon == "T Knife"
+        and adapterState.cosmetics.weapon == "T Knife",
+    "Cosmetic weapon selection must move independently of the equipped weapon"
+)
 adapter:cycleSkin(1)
 local knifeOverride = adapterState.settings.skinOverrides["T Knife"]
 assert(knifeOverride.weapon == "Karambit", "Stock knives must cycle into other melee weapon families")
@@ -855,7 +862,11 @@ assert(
         and adapterState.cosmetics.skinLabel == "Nebula (Pattern 2)",
     "Adjacent numbered patterns must remain distinct selectable cosmetics"
 )
-adapterState.activeWeapon = "AK-47"
+assert(
+    adapterState.settings.skinOverrides["T Knife"].weapon == "Karambit"
+        and adapterState.settings.skinOverrides["AK-47"].skin == "Stock",
+    "Changing an unequipped weapon must store its override without changing the equipped weapon"
+)
 
 adapter:cycleGlove(1)
 assert(adapterState.settings.gloveOverride.weapon == "CT Glove")
