@@ -1165,6 +1165,10 @@ local initialRootLinearVelocity = Vector3.new(7, 0, -3)
 root.AssemblyLinearVelocity = initialRootLinearVelocity
 local initialRootJointC0 = rootJoint.C0
 local initialRootJointTransform = rootJoint.Transform
+local expectedBhopSpeedCeiling = math.max(
+    initialRootLinearVelocity.Magnitude,
+    humanoid.WalkSpeed * 1.35
+)
 currentCamera.CFrame = roblox.CFrame.new()
 renderCallback(0.0625)
 assert(humanoid.Jump == true, "Bunny Hop must jump only through the live humanoid")
@@ -1192,7 +1196,7 @@ assert(
 )
 assert(
     root.AssemblyLinearVelocity.X > initialRootLinearVelocity.X
-        and root.AssemblyLinearVelocity.Magnitude <= humanoid.WalkSpeed + 0.001,
+        and root.AssemblyLinearVelocity.Magnitude <= expectedBhopSpeedCeiling + 0.001,
     "Bunny Hop movement input must add acceleration without discarding perpendicular momentum"
 )
 local acceleratedVelocity = root.AssemblyLinearVelocity
@@ -1210,15 +1214,18 @@ assert(
         and root.AssemblyLinearVelocity.Magnitude >= acceleratedVelocity.Magnitude,
     "Bunny Hop strafing must bend retained momentum toward movement input without losing speed"
 )
-local speedCeiling = math.max(initialRootLinearVelocity.Magnitude, humanoid.WalkSpeed)
 for _ = 1, 60 do
     local velocity = root.AssemblyLinearVelocity
     movementDirection = Vector3.new(-velocity.Z, 0, velocity.X).Unit
     renderCallback(0.016)
 end
 assert(
-    root.AssemblyLinearVelocity.Magnitude <= speedCeiling + 0.001,
-    "Bunny Hop strafing must not accumulate server-rejected horizontal speed"
+    root.AssemblyLinearVelocity.Magnitude > humanoid.WalkSpeed + 0.5,
+    "Bunny Hop must build useful speed above normal walking through sustained air strafing"
+)
+assert(
+    root.AssemblyLinearVelocity.Magnitude <= expectedBhopSpeedCeiling + 0.001,
+    "Bunny Hop strafing must keep its boosted horizontal speed bounded"
 )
 assert(thirdPersonStates[#thirdPersonStates] == true, "Spin Bot must request third-person view")
 assert(characterPart.LocalTransparencyModifier == 0, "Third person must reveal the local character")

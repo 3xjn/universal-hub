@@ -12,6 +12,7 @@ local KNIFE_EXTRA_REACH = 3
 local KNIFE_FALLBACK_RANGE = 7
 local KNIFE_MICRO_STEP = 0.75
 local BHOP_AIR_ACCELERATION = 10
+local BHOP_SPEED_MULTIPLIER = 1.35
 local SPIN_SPEED = math.rad(1440)
 local THIRD_PERSON_DISTANCE = 8
 local MOVEMENT_RENDER_STEP = "UniversalHubCounterbloxMovement"
@@ -1263,7 +1264,10 @@ function Counterblox.new(context)
             local moveDirection = movementDirection and movementDirection() or humanoid.MoveDirection
             if not bhopMomentum then
                 bhopMomentum = Vector3.new(velocity.X, 0, velocity.Z)
-                bhopSpeedLimit = math.max(bhopMomentum.Magnitude, humanoid.WalkSpeed)
+                bhopSpeedLimit = math.max(
+                    bhopMomentum.Magnitude,
+                    humanoid.WalkSpeed * BHOP_SPEED_MULTIPLIER
+                )
             end
             if moveDirection.Magnitude > 0.001 then
                 local direction = moveDirection.Unit
