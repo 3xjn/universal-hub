@@ -66,6 +66,7 @@ local defaultSettings = {
     aimSmoothness = 0,
     bhop = false,
     boxes = true,
+    bombTimer = true,
     chams = true,
     fov = 180,
     fovCircle = true,
@@ -86,10 +87,12 @@ local defaultSettings = {
     noSmoke = false,
     noSpread = false,
     noWeaponSlow = false,
+    rapidFire = false,
     silentAim = false,
     skinOverrides = {},
     spinBot = false,
     triggerBot = false,
+    utilityEsp = true,
     wallbang = false,
     weapon = true,
 }
@@ -136,6 +139,10 @@ local store = Store.new({
     error = nil,
     menuVisible = true,
     observations = {},
+    bombObservation = {
+        visible = false,
+    },
+    utilityObservations = {},
     gloves = {
         maximumWear = 1,
         minimumWear = 0,
@@ -191,6 +198,15 @@ overlay = Overlay.new({
     getCamera = function()
         return Workspace.CurrentCamera
     end,
+    uiParent = (function()
+        local success, parent = pcall(function()
+            if type(gethui) == "function" then
+                return gethui()
+            end
+            return game:GetService("CoreGui")
+        end)
+        return success and parent or nil
+    end)(),
     optionLabels = adapterDefinition.optionLabels,
     setFov = function(value)
         session:setFov(value)
@@ -252,6 +268,9 @@ local created, result = pcall(adapterDefinition.new, {
     isInputCaptured = function()
         return inputCapture:IsEnabled()
     end,
+    isFireHeld = function()
+        return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+    end,
     isJumpHeld = function()
         return UserInputService:IsKeyDown(Enum.KeyCode.Space)
     end,
@@ -275,8 +294,8 @@ local created, result = pcall(adapterDefinition.new, {
         return direction.Magnitude > 1 and direction.Unit or direction
     end,
     oh = oh,
-    render = function(observations, mousePosition)
-        overlay:render(observations, mousePosition)
+    render = function(observations, mousePosition, utilityObservations)
+        overlay:render(observations, mousePosition, utilityObservations)
     end,
     restoreFunction = restorefunction,
     settingsChanged = function(updatedSettings)

@@ -21,6 +21,148 @@ assert(Counterblox.classifyWeapon({
 }) == "Knife")
 assert(Counterblox.classifyWeapon({ IsDestroyed = true, Bullet = {} }) == nil)
 
+assert(
+    math.abs(Counterblox.bombTimeRemaining({ Time = 100, TimeUntilExplode = 40 }, 112.5) - 27.5) < 0.001,
+    "Bomb time must be anchored to the replicated server timestamp"
+)
+assert(
+    Counterblox.bombTimeRemaining({ Time = 100, TimeUntilExplode = 40 }, 145) == 0,
+    "Expired bomb time must clamp at zero"
+)
+local closeBomb = Counterblox.bombPresentation(25)
+local farBomb = Counterblox.bombPresentation(300)
+local hiddenBomb = Counterblox.bombPresentation(351)
+assert(
+    closeBomb.width > farBomb.width and closeBomb.height > farBomb.height,
+    "The bomb billboard must become more readable nearby without growing at distance"
+)
+assert(
+    closeBomb.alwaysOnTop and not farBomb.alwaysOnTop and not hiddenBomb.visible,
+    "Through-wall bomb information must be nearby-only and disappear beyond its range"
+)
+local heLabel, heTone = Counterblox.utilityLabel("HE Grenade")
+local fireLabel, fireTone = Counterblox.utilityLabel("Molotov")
+local smokeLabel, smokeTone = Counterblox.utilityLabel("Smoke Grenade")
+assert(heLabel == "HE" and heTone == "danger")
+assert(fireLabel == "MOLOTOV" and fireTone == "danger")
+assert(smokeLabel == "SMOKE" and smokeTone == "smoke")
+
+local meleeTargetRoot = {
+    CFrame = CFrame.new(0, 0, -4.4),
+    Position = Vector3.new(0, 0, -4.4),
+}
+local meleePlan = Counterblox.planMeleeAttack(
+    Vector3.new(0, 2, 0),
+    Vector3.new(0, 0, 0),
+    {
+        character = {
+            FindFirstChild = function(_, name)
+                return name == "HumanoidRootPart" and meleeTargetRoot or nil
+            end,
+        },
+        position = Vector3.new(0, 2, -4.4),
+    },
+    3
+)
+assert(
+    meleePlan.inRange,
+    "Knife Aura must measure the game's camera-origin 3-stud ray plus 1.5-stud sphere reach"
+)
+assert(
+    meleePlan.heavy,
+    "Knife Aura must request a heavy attack when the attacker is inside Counterblox's backstab angle"
+)
+local frontMeleePlan = Counterblox.planMeleeAttack(
+    Vector3.new(0, 2, -8.8),
+    Vector3.new(0, 0, -8.8),
+    {
+        character = {
+            FindFirstChild = function(_, name)
+                return name == "HumanoidRootPart" and meleeTargetRoot or nil
+            end,
+        },
+        position = Vector3.new(0, 2, -4.4),
+    },
+    3
+)
+assert(not frontMeleePlan.heavy, "Knife Aura must keep front-facing attacks on the faster light swing")
+local nearestMelee = Counterblox.nearestMeleeTarget(Vector3.new(), {
+    {
+        position = Vector3.new(0, 2, -20),
+        visible = true,
+    },
+    {
+        position = Vector3.new(0, 2, -4),
+        screenDistance = 900,
+        visible = true,
+    },
+})
+assert(
+    nearestMelee and nearestMelee.position == Vector3.new(0, 2, -4),
+    "Knife Aura must acquire the closest visible player by world distance without inheriting aim FOV"
+)
+
+local aimHead = {
+    Position = Vector3.new(0, 3, -10),
+}
+local aimBody = {
+    Position = Vector3.new(0, 1.5, -10),
+}
+local aimRoot = {
+    CFrame = CFrame.new(0, 0, -10),
+    Position = Vector3.new(0, 0, -10),
+    Size = Vector3.new(2, 2, 1),
+}
+local aimCharacter = {
+    FindFirstChild = function(_, name)
+        return ({
+            Head = aimHead,
+            HumanoidRootPart = aimRoot,
+            UpperTorso = aimBody,
+        })[name]
+    end,
+    FindFirstChildOfClass = function()
+        return nil
+    end,
+}
+local baseAimObservation = {
+    character = aimCharacter,
+    part = aimHead,
+    position = aimHead.Position,
+}
+local bodyAim = Counterblox.applyAimRates(baseAimObservation, {
+    headshotRate = 0,
+    missRate = 0,
+}, function()
+    return 0
+end)
+assert(
+    bodyAim.part == aimBody and bodyAim.position == aimBody.Position,
+    "A 0% headshot rate must move Counterblox aim off the default Head priority and onto the torso"
+)
+local headAim = Counterblox.applyAimRates(baseAimObservation, {
+    headshotRate = 100,
+    missRate = 0,
+}, function()
+    return 0
+end)
+assert(
+    headAim.part == aimHead and headAim.position == aimHead.Position,
+    "A 100% headshot rate must explicitly select the live Head"
+)
+local missedAim = Counterblox.applyAimRates(baseAimObservation, {
+    headshotRate = 100,
+    missRate = 100,
+}, function()
+    return 0
+end)
+assert(
+    missedAim.intentionalMiss
+        and missedAim.part == aimRoot
+        and missedAim.position ~= aimRoot.Position,
+    "Miss Rate must take priority and place the shot outside the character"
+)
+
 local wall = {}
 local targetPart = {}
 local origin = Vector3.new(0, 0, 0)
@@ -131,6 +273,19 @@ local bulletModule = {
     end,
     getTrueSpread = function()
         return 12
+    end,
+}
+local weaponShootCalls = 0
+local weaponModule = {
+    Classes = {
+        Bullet = bulletModule,
+    },
+    shoot = function(weapon)
+        weaponShootCalls += 1
+        weapon.IsShooting = true
+        weapon.ShootDelayThread = { source = "game" }
+        weapon.NextShotDue = 10
+        return "shot"
     end,
 }
 local currentCamera = {
@@ -394,11 +549,7 @@ local replicatedStorage = {
             },
         },
         Melee = meleeModule,
-        Weapon = {
-            Classes = {
-                Bullet = bulletModule,
-            },
-        },
+        Weapon = weaponModule,
     },
     Database = {
         Components = {
@@ -515,6 +666,17 @@ local services = {
         end,
         Raycast = function() end,
         Spherecast = function() end,
+        FindFirstChild = function()
+            return nil
+        end,
+        GetServerTimeNow = function()
+            return 0
+        end,
+    },
+    CollectionService = {
+        GetTagged = function()
+            return {}
+        end,
     },
 }
 local requiredModules = {}
@@ -522,10 +684,12 @@ local hookImplementations = {}
 local adapterState = {
     activeWeapon = "AK-47",
     settings = {
+        bombTimer = true,
         fullScreenAim = false,
         noSpread = true,
         silentAim = true,
         triggerBot = true,
+        utilityEsp = true,
         bhop = false,
         knifeAura = false,
         microStep = false,
@@ -533,18 +697,31 @@ local adapterState = {
         spinBot = false,
         noSmoke = false,
         noWeaponSlow = false,
+        rapidFire = false,
         fov = 180,
         gloveOverride = false,
         gloveColorOverride = false,
+        headshotRate = 0,
+        missRate = 0,
         skinOverrides = {},
     },
 }
 local clickCount = 0
+local heavyClickCount = 0
+local pressCount = 0
 local inputCaptured = false
+local delayedCallbacks = {}
 local movementDirection = Vector3.new(1, 0, 0)
 local thirdPersonStates = {}
 local nearestTargetPosition = Vector3.new(0, 0, -10)
+local nearestTargetCharacter
 local nearestTargetVisible = true
+local observedPlayers
+local nearestTargetPlayer = {
+    GetAttribute = function()
+        return nil
+    end,
+}
 local moduleValues = {
     [bulletModule] = bulletModule,
     [cameraController] = cameraController,
@@ -556,6 +733,7 @@ local moduleValues = {
     [meleeModule] = meleeModule,
     [skinsModule] = skinsModule,
     [viewmodelModule] = viewmodelModule,
+    [weaponModule] = weaponModule,
     [weaponComponentModule] = weaponComponentModule,
     [voxelSmoke] = voxelSmoke,
 }
@@ -575,8 +753,25 @@ getrenv = function()
 end
 
 local initialized, adapter = pcall(Counterblox.new, {
+    aimClick = function()
+        heavyClickCount += 1
+    end,
+    cancelThread = function(thread)
+        thread.cancelled = true
+    end,
     click = function()
         clickCount += 1
+    end,
+    press = function()
+        pressCount += 1
+    end,
+    delay = function(_, callback)
+        local thread = {
+            callback = callback,
+            cancelled = false,
+        }
+        table.insert(delayedCallbacks, thread)
+        return thread
     end,
     gcObjects = function()
         return { existingLiveComponent }
@@ -587,6 +782,9 @@ local initialized, adapter = pcall(Counterblox.new, {
     end,
     isInputCaptured = function()
         return inputCaptured
+    end,
+    isFireHeld = function()
+        return existingLiveComponent.IsFireHeld == true
     end,
     isJumpHeld = function()
         return true
@@ -603,14 +801,23 @@ local initialized, adapter = pcall(Counterblox.new, {
             nearestPlayer = function(options)
                 adapterState.lastNearestOptions = options
                 return {
-                    player = {},
+                    character = nearestTargetCharacter,
+                    player = nearestTargetPlayer,
                     part = targetPart,
                     position = nearestTargetPosition,
                     visible = nearestTargetVisible,
                 }
             end,
             observePlayers = function()
-                return {}
+                return observedPlayers or {
+                    {
+                        character = nearestTargetCharacter,
+                        player = nearestTargetPlayer,
+                        part = targetPart,
+                        position = nearestTargetPosition,
+                        visible = nearestTargetVisible,
+                    },
+                }
             end,
         },
     },
@@ -642,6 +849,17 @@ local initialized, adapter = pcall(Counterblox.new, {
 })
 
 assert(initialized, "Counterblox adapter must initialize without requiring InventoryController: " .. tostring(adapter))
+assert(table.find(adapter.capabilities, "rapidFire"), "Counterblox must advertise Rapid Fire")
+assert(
+    table.find(adapter.capabilities, "bombTimer")
+        and table.find(adapter.capabilities, "utilityEsp"),
+    "Counterblox must advertise both server-authored world overlays"
+)
+assert(
+    table.find(adapter.capabilities, "headshotRate")
+        and table.find(adapter.capabilities, "missRate"),
+    "Counterblox must advertise both accuracy-rate sliders"
+)
 assert(
     lateRenderName ~= nil and lateRenderPriority >= 2000,
     "Spin Bot must run after Counterblox's own character rotation step"
@@ -725,6 +943,55 @@ assert(
 adapterState.settings.fullScreenAim = false
 
 assert(hookImplementations[weaponComponentModule.new], "Skin changer must hook WeaponComponent.new")
+assert(
+    hookImplementations[weaponModule.shoot] == nil,
+    "Rapid Fire must not hook Weapon.shoot because calling its original function loses the game thread's Instance capability"
+)
+existingLiveComponent.Bullet = {
+    Properties = {
+        Penetration = 10,
+        Range = 500,
+    },
+}
+existingLiveComponent.IsEquipped = true
+existingLiveComponent.IsFireHeld = true
+existingLiveComponent.IsReloading = false
+existingLiveComponent.IsShooting = true
+existingLiveComponent.Rounds = 5
+existingLiveComponent.ShootDelayThread = { source = "game" }
+existingLiveComponent.NextShotDue = 10
+adapterState.settings.rapidFire = true
+local clicksBeforeRapidDispatch = clickCount
+local pressesBeforeRapidDispatch = pressCount
+renderCallback()
+assert(
+    clickCount == clicksBeforeRapidDispatch
+        and pressCount == pressesBeforeRapidDispatch + 1
+        and existingLiveComponent.ShootDelayThread == nil
+        and existingLiveComponent.NextShotDue == nil,
+    "Rapid Fire must clear the local shot lock and pulse mouse-down without releasing the player's held-fire state"
+)
+require("@lune/task").wait(0.07)
+renderCallback()
+assert(
+    clickCount == clicksBeforeRapidDispatch
+        and pressCount == pressesBeforeRapidDispatch + 2,
+    "Rapid Fire must keep pulsing mouse-down through the entire physical hold"
+)
+adapterState.settings.rapidFire = false
+renderCallback()
+assert(
+    clickCount == clicksBeforeRapidDispatch
+        and pressCount == pressesBeforeRapidDispatch + 2
+        and existingLiveComponent.IsShooting == false
+        and existingLiveComponent.ShootDelayThread == nil
+        and existingLiveComponent.NextShotDue == nil,
+    "Disabling Rapid Fire must stop its held-fire loop and clear only the local shot lock"
+)
+assert(
+    existingLiveComponent.Bullet.Properties.Range == 500,
+    "Rapid Fire must never mutate guarded Counterblox weapon properties"
+)
 assert(
     hookImplementations[viewmodelModule.construct],
     "Glove changer must hook viewmodel construction where the owning player is available"
@@ -1021,8 +1288,12 @@ assert(
 )
 adapterState.settings.spinBot = false
 assert(renderCallback, "Counterblox adapter must connect its render loop")
+local clicksBeforeMissingCharacter = clickCount
 renderCallback()
-assert(clickCount == 0, "Trigger Bot must not click while LocalPlayer.Character is nil")
+assert(
+    clickCount == clicksBeforeMissingCharacter,
+    "Trigger Bot must not click while LocalPlayer.Character is nil"
+)
 adapterState.settings.noFlash = true
 adapterState.settings.noSmoke = true
 renderCallback()
@@ -1129,6 +1400,22 @@ assert(
 )
 inputCaptured = false
 
+adapterState.settings.headshotRate = 100
+adapterState.settings.missRate = 100
+nearestTargetCharacter = aimCharacter
+require("@lune/task").wait(0.11)
+renderCallback(0.016)
+local intentionalMissShot = hookImplementations[bulletModule._performRaycast](component.Bullet, 0)
+assert(
+    #intentionalMissShot.Hits == 0
+        and intentionalMissShot.Direction ~= nearestTargetPosition.Unit,
+    "A sampled Counterblox miss must fire beside the target instead of silently falling back to a headshot"
+)
+local clicksAfterIntentionalMiss = clickCount
+adapterState.settings.headshotRate = 0
+adapterState.settings.missRate = 0
+nearestTargetCharacter = nil
+
 component.Name = "Skinned AK-47"
 adapterState.settings.silentAim = true
 adapterState.settings.wallbang = true
@@ -1150,7 +1437,7 @@ gameRaycastHits = {
 require("@lune/task").wait(0.11)
 renderCallback(0.016)
 assert(
-    clickCount == clicksBeforeRejectedWallbang + 2,
+    clickCount == clicksAfterIntentionalMiss + 1,
     "Wallbang preflight must use the tracked weapon identity when a skin changes the live component name"
 )
 hookImplementations[bulletModule._performRaycast](component.Bullet, 0)
@@ -1207,7 +1494,7 @@ assert(
     root.AssemblyLinearVelocity == acceleratedVelocity,
     "Bunny Hop must retain horizontal momentum while Space is held without movement input"
 )
-movementDirection = Vector3.new(0, 0, 1)
+movementDirection = Vector3.new(-acceleratedVelocity.Z, 0, acceleratedVelocity.X).Unit
 renderCallback(0.016)
 assert(
     root.AssemblyLinearVelocity.Z > acceleratedVelocity.Z
@@ -1226,6 +1513,15 @@ assert(
 assert(
     root.AssemblyLinearVelocity.Magnitude <= expectedBhopSpeedCeiling + 0.001,
     "Bunny Hop strafing must keep its boosted horizontal speed bounded"
+)
+local velocityBeforeCounterStrafe = root.AssemblyLinearVelocity
+movementDirection = -velocityBeforeCounterStrafe.Unit
+for _ = 1, 12 do
+    renderCallback(0.016)
+end
+assert(
+    root.AssemblyLinearVelocity:Dot(velocityBeforeCounterStrafe) < 0,
+    "Bunny Hop counter-strafing must decelerate and reverse retained momentum like CS movement"
 )
 assert(thirdPersonStates[#thirdPersonStates] == true, "Spin Bot must request third-person view")
 assert(characterPart.LocalTransparencyModifier == 0, "Third person must reveal the local character")
@@ -1287,6 +1583,72 @@ nearestTargetPosition = Vector3.new(0, 0, -10)
 adapterState.settings.silentAim = false
 adapterState.settings.bhop = false
 adapterState.settings.knifeAura = true
+nearestTargetPosition = Vector3.new(8.75, 0, 0)
+local clicksBeforeRapidKnife = clickCount
+renderCallback(0.016)
+assert(
+    clickCount == clicksBeforeRapidKnife + 1,
+    "Knife Aura must use its bounded edge tolerance to attack a target just beyond the measured range"
+)
+require("@lune/task").wait(0.07)
+renderCallback(0.016)
+assert(
+    clickCount == clicksBeforeRapidKnife + 2,
+    "Knife Aura must include rapid knife repetition while the same close target remains valid"
+)
+hookImplementations[meleeModule.shoot]({
+    Properties = {
+        Range = 3,
+    },
+}, false)
+require("@lune/task").wait(0.07)
+local backstabRoot = {
+    CFrame = CFrame.new(0, 0, -4.4),
+    Position = Vector3.new(0, 0, -4.4),
+}
+nearestTargetCharacter = {
+    FindFirstChild = function(_, name)
+        return name == "HumanoidRootPart" and backstabRoot or nil
+    end,
+    FindFirstChildOfClass = function()
+        return nil
+    end,
+}
+currentCamera.CFrame = CFrame.new(0, 2, 0)
+nearestTargetPosition = Vector3.new(0, 2, -100)
+observedPlayers = {
+    {
+        character = nearestTargetCharacter,
+        player = nearestTargetPlayer,
+        part = targetPart,
+        position = Vector3.new(0, 2, -4.4),
+        screenDistance = 900,
+        visible = true,
+    },
+}
+inputCaptured = true
+local lightsBeforeBackstab = clickCount
+local heaviesBeforeBackstab = heavyClickCount
+renderCallback(0.016)
+assert(
+    heavyClickCount == heaviesBeforeBackstab + 1 and clickCount == lightsBeforeBackstab,
+    "Knife Aura must auto-backstab the closest visible player even outside aim FOV while the menu owns user input"
+)
+assert(
+    adapterState.lastShot == "Auto backstab" and adapterState.target == nearestTargetPlayer,
+    "Auto backstab must publish its successful heavy-attack dispatch for live verification"
+)
+require("@lune/task").wait(0.07)
+inputCaptured = false
+observedPlayers = nil
+nearestTargetCharacter = nil
+currentCamera.CFrame = CFrame.new()
+hookImplementations[meleeModule.shoot]({
+    Properties = {
+        Range = 8,
+    },
+}, false)
+nearestTargetPosition = Vector3.new(0, 0, -10)
 local clicksBeforeKnifeRangeCheck = clickCount
 renderCallback(0.016)
 assert(

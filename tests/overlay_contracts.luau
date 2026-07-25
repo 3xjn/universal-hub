@@ -1,6 +1,10 @@
 local roblox = require("@lune/roblox")
 Color3 = roblox.Color3
+Enum = roblox.Enum
+UDim = roblox.UDim
+UDim2 = roblox.UDim2
 Vector2 = roblox.Vector2
+Vector3 = roblox.Vector3
 Drawing = {
     Fonts = {
         Plex = 2,
@@ -33,6 +37,15 @@ function surface:destroy()
     destroyed = true
 end
 
+local utilityPaintCallback
+function surface:paint(zIndex, callback)
+    assert(zIndex == 68, "Utility zone mesh must stay behind its marker and label")
+    utilityPaintCallback = callback
+    return {
+        Disconnect = function() end,
+    }
+end
+
 local store = Store.new({
     activeWeapon = "AWP",
     cosmetics = {
@@ -61,6 +74,7 @@ local store = Store.new({
     menuVisible = true,
     settings = {
         aimSmoothness = 35,
+        bombTimer = true,
         boxes = true,
         chams = true,
         fov = 180,
@@ -82,9 +96,11 @@ local store = Store.new({
         noSmoke = false,
         noSpread = false,
         noWeaponSlow = false,
+        rapidFire = false,
         silentAim = false,
         spinBot = false,
         triggerBot = false,
+        utilityEsp = true,
         wallbang = false,
         weapon = true,
     },
@@ -98,10 +114,23 @@ local menuVisibilityChanges = {}
 local cosmeticsVisibilityChanges = {}
 local cosmeticActions = {}
 local cosmeticWeaponChanges = {}
+local guiInstances = {}
+local function createInstance(className)
+    local instance = {
+        ClassName = className,
+        Destroyed = false,
+    }
+    function instance:Destroy()
+        self.Destroyed = true
+    end
+    table.insert(guiInstances, instance)
+    return instance
+end
 local overlay = Overlay.new({
     capabilities = {
         "aimSmoothness",
         "bhop",
+        "bombTimer",
         "boxes",
         "chams",
         "headshotRate",
@@ -115,9 +144,11 @@ local overlay = Overlay.new({
         "noSmoke",
         "noSpread",
         "noWeaponSlow",
+        "rapidFire",
         "silentAim",
         "spinBot",
         "triggerBot",
+        "utilityEsp",
         "wallbang",
         "weapon",
     },
@@ -130,6 +161,7 @@ local overlay = Overlay.new({
     cycleCosmeticWeapon = function(direction)
         table.insert(cosmeticWeaponChanges, direction)
     end,
+    createInstance = createInstance,
     drawing = {
         createSurface = function()
             return surface
@@ -147,6 +179,7 @@ local overlay = Overlay.new({
     optionLabels = {
         silentAim = "Camera Aim",
     },
+    uiParent = {},
     setFov = function(value)
         table.insert(fovChanges, value)
     end,
@@ -205,6 +238,7 @@ assert(overlay.controls.options.microStep.marker ~= nil)
 assert(overlay.controls.options.noFlash.label.Text == "No Flash")
 assert(overlay.controls.options.noSmoke.label.Text == "No Smoke")
 assert(overlay.controls.options.noWeaponSlow.label.Text == "No Weapon Slow")
+assert(overlay.controls.options.rapidFire.label.Text == "Rapid Fire")
 assert(overlay.controls.options.boxes.label.Text == "Hitboxes")
 assert(overlay.controls.options.chams.label.Text == "Chams")
 assert(overlay.controls.rates.aimSmoothness.label.Text == "Aim Smoothness")
@@ -213,7 +247,34 @@ assert(overlay.controls.rates.missRate.label.Text == "Miss Rate")
 assert(overlay.controls.rates.headshotRate.value.Text == "50%")
 assert(overlay.controls.rates.missRate.value.Text == "10%")
 assert(overlay.controls.rates.aimSmoothness.value.Text == "35%")
-assert(overlay.controls.panel.Size.Y == 698, "Collapsed cosmetics must contain aim controls")
+local bombAdornee = {}
+store:Patch({
+    bombObservation = {
+        adornee = bombAdornee,
+        presentation = {
+            alwaysOnTop = true,
+            height = 30,
+            textSize = 13,
+            visible = true,
+            width = 92,
+        },
+        remaining = 37.4,
+        visible = true,
+    },
+})
+assert(overlay.worldGui.billboard.Enabled and overlay.worldGui.billboard.Adornee == bombAdornee)
+assert(
+    overlay.worldGui.title.Text == "BOMB"
+        and overlay.worldGui.timer.Text == "37.4s"
+        and overlay.worldGui.accent.BackgroundColor3 == Color3.fromRGB(98, 214, 173),
+    "Bomb telemetry must use the Hub's split-label panel and accent treatment instead of a raw debug badge"
+)
+local collapsedPanelHeight = overlay.controls.panel.Size.Y
+assert(
+    overlay.controls.panel.Position.Y + collapsedPanelHeight
+        > overlay.controls.options.noSmoke.row.Position.Y + overlay.controls.options.noSmoke.row.Size.Y,
+    "Collapsed cosmetics must contain every available option"
+)
 assert(overlay.controls.fovLabel.Text == "FOV · 180 px")
 assert(
     overlay.controls.fovValue.Text == "Fullscreen Off",
@@ -276,15 +337,19 @@ local panelStart = overlay.controls.panel.Position
 overlay.controls.panel.callbacks.pointerdown(nil, panelStart + Vector2.new(10, 10))
 overlay.controls.panel.callbacks.drag(nil, Vector2.new(510, 40))
 assert(
-    overlay.controls.panel.Position == Vector2.new(500, 22)
-        and overlay.controls.title.Position == Vector2.new(512, 34),
-    "Dragging the panel must move the complete Hub window as one unit"
+    overlay.controls.panel.Position ~= panelStart
+        and overlay.controls.title.Position
+            == overlay.controls.panel.Position + Vector2.new(12, 12),
+    "Dragging the panel must move the complete Hub window as one unit within the viewport"
 )
 
 overlay.controls.cosmetics.header.callbacks.click()
 assert(cosmeticsVisibilityChanges[1] == true)
 store:Patch({ cosmeticsOpen = true })
-assert(overlay.controls.panel.Size.Y == 860)
+assert(
+    overlay.controls.panel.Size.Y > collapsedPanelHeight,
+    "Opening cosmetics must expand the panel below its option controls"
+)
 assert(
     overlay.controls.cosmetics.skinName.Text == "Nebula (Pattern 11)",
     "Cosmetic controls must show the readable variant label without replacing its raw ID"
@@ -293,6 +358,12 @@ assert(overlay.controls.cosmetics.weaponModeLabel.Text == "AK-47")
 assert(overlay.controls.cosmetics.gloveModeLabel.Text == "Gloves")
 assert(overlay.controls.cosmetics.weaponMode.Color == Color3.fromRGB(23, 53, 45))
 assert(overlay.controls.cosmetics.gloveMode.Color == Color3.fromRGB(21, 28, 35))
+local weaponNext = overlay.controls.cosmetics.weaponNext
+local skinNext = overlay.controls.cosmetics.next
+assert(
+    weaponNext.Position.Y + weaponNext.Size.Y < skinNext.Position.Y,
+    "Weapon and skin arrow hit regions must remain separated by the menu spacing rhythm"
+)
 overlay.controls.cosmetics.weaponPrevious.callbacks.click()
 overlay.controls.cosmetics.weaponNext.callbacks.click()
 assert(
@@ -320,6 +391,7 @@ assert(overlay.controls.cosmetics.statTrakLabel.Text == "Solid Color")
 assert(overlay.controls.cosmetics.statTrakValue.Text == "Off")
 overlay.controls.cosmetics.statTrak.callbacks.click()
 assert(cosmeticActions[7].action == "gloveColor" and type(cosmeticActions[7].value) == "table")
+local glovePanelHeightBeforeColor = overlay.controls.panel.Size.Y
 store:Patch({
     settings = {
         gloveColorOverride = {
@@ -329,7 +401,10 @@ store:Patch({
         },
     },
 })
-assert(overlay.controls.panel.Size.Y == 900)
+assert(
+    overlay.controls.panel.Size.Y > glovePanelHeightBeforeColor,
+    "Enabling glove color controls must expand the cosmetics panel"
+)
 assert(overlay.controls.cosmetics.statTrakValue.Text == "On")
 assert(overlay.controls.cosmetics.colorChannels.r.value.Text == "64")
 assert(overlay.controls.cosmetics.colorChannels.g.value.Text == "128")
@@ -468,6 +543,74 @@ overlay:render({
 }, Vector2.new(100, 100))
 assert(playerNodes.weapon.Visible == false, "ESP must omit a weapon label when an adapter has no weapon data")
 overlay:render(detailedObservations, Vector2.new(640, 360))
+overlay:render(detailedObservations, Vector2.new(640, 360), {
+    {
+        label = "HE",
+        onScreen = true,
+        polygons = {},
+        screenPosition = Vector2.new(320, 240),
+        tone = "danger",
+    },
+    {
+        label = "FIRE ZONE",
+        onScreen = true,
+        polygons = {
+            {
+                Vector2.new(400, 300),
+                Vector2.new(440, 300),
+                Vector2.new(440, 330),
+                Vector2.new(400, 330),
+            },
+        },
+        screenPosition = Vector2.new(420, 290),
+        tone = "danger",
+    },
+})
+assert(
+    overlay.utilityNodes[1].marker.Visible
+        and overlay.utilityNodes[1].label.Text == "HE",
+    "Moving utility observations must render a compact labeled marker"
+)
+assert(
+    overlay.utilityNodes[2].label.Text == "FIRE ZONE",
+    "Replicated damage tiles must retain their projected zone label"
+)
+local paintedTriangles = {}
+utilityPaintCallback({
+    FilledTriangle = function(pointA, pointB, pointC, color, opacity)
+        table.insert(paintedTriangles, {
+            color = color,
+            opacity = opacity,
+            points = { pointA, pointB, pointC },
+        })
+    end,
+})
+assert(
+    #paintedTriangles == 2
+        and paintedTriangles[1].opacity == 0.14
+        and paintedTriangles[1].color == Color3.fromRGB(230, 107, 110),
+    "Multi-polygon damage zones must paint as one immediate Drawing triangle mesh instead of retained square objects"
+)
+assert(
+    overlay.utilityNodes[2].zones == nil,
+    "Immediate utility meshes must not allocate one retained Drawing object per voxel"
+)
+store:Patch({ settings = { utilityEsp = false } })
+overlay:render(detailedObservations, Vector2.new(640, 360), {
+    {
+        label = "HE",
+        onScreen = true,
+        polygons = {},
+        screenPosition = Vector2.new(320, 240),
+        tone = "danger",
+    },
+})
+assert(
+    overlay.utilityNodes[1].marker.Visible == false
+        and overlay.utilityZonePaint.enabled == false,
+    "Disabling Utility ESP must hide both moving markers and persistent zones"
+)
+store:Patch({ settings = { utilityEsp = true } })
 
 store:Patch({ menuVisible = false })
 assert(captures[2] == false, "Hiding the Drawing menu must restore gameplay input")

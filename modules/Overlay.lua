@@ -7,7 +7,7 @@ local OPTION_GROUPS = {
         label = "RAGE",
         rows = {
             { "silentAim", "wallbang" },
-            { "humanAim" },
+            { "humanAim", "rapidFire" },
             { "triggerBot", "noSpread" },
             { "noRecoil", "noWeaponSlow" },
         },
@@ -33,15 +33,19 @@ local OPTION_GROUPS = {
             { "boxes", "chams" },
             { "names", "health" },
             { "weapon", "noFlash" },
-            { "noSmoke" },
+            { "noSmoke", "bombTimer" },
+            { "utilityEsp" },
         },
     },
 }
 
 local OPTION_LABELS = {
     bhop = "Bunny Hop",
+    bombTimer = "Bomb Timer",
+    rapidFire = "Rapid Fire",
     silentAim = "Silent Aim",
     triggerBot = "Trigger Bot",
+    utilityEsp = "Utility ESP",
     noSpread = "No Spread",
     noRecoil = "No Recoil",
     noFlash = "No Flash",
@@ -157,12 +161,23 @@ function Overlay.new(context)
         optionLabels = context.optionLabels or {},
         rateAvailable = rateAvailable,
         playerNodes = {},
+        utilityNodes = {},
+        utilityZonePaint = {
+            enabled = false,
+            observations = {},
+        },
+        worldGui = nil,
         surface = context.drawing.createSurface({
             acceptProcessedInput = true,
         }),
     }, Overlay)
 
     self:_build()
+    self.immediateUtilityZones = pcall(function()
+        self.utilityPaintConnection = self.surface:paint(68, function(renderer)
+            self:_paintUtilityZones(renderer)
+        end)
+    end)
     self.unsubscribe = context.store:Subscribe(function(state)
         self:_renderState(state)
     end)
@@ -1061,6 +1076,7 @@ function Overlay:_renderState(state)
     controls.fovValue.Text = settings.fullScreenAim and "Fullscreen On" or "Fullscreen Off"
     controls.fovCircle.Radius = settings.fov
     controls.fovCircle.Visible = settings.fovCircle ~= false and not settings.fullScreenAim
+    self:_renderBomb(state.bombObservation, settings)
 
     local cosmeticMode = self.cosmeticMode
     local gloveColor = settings.gloveColorOverride
@@ -1118,6 +1134,111 @@ function Overlay:_renderState(state)
     end
     cosmeticControls.resetLabel.Text = cosmeticMode == "gloves" and "Reset Game" or "Reset Stock"
     self:_setMenuVisible(state.menuVisible ~= false)
+end
+
+function Overlay:_ensureBombBillboard()
+    if self.worldGui or not self.context.uiParent then
+        return self.worldGui
+    end
+
+    local createInstance = self.context.createInstance or Instance.new
+    local billboard = createInstance("BillboardGui")
+    billboard.Name = "UniversalHubBombTimer"
+    billboard.AlwaysOnTop = false
+    billboard.Enabled = false
+    billboard.LightInfluence = 0
+    billboard.MaxDistance = 350
+    billboard.Size = UDim2.fromOffset(64, 22)
+    billboard.StudsOffsetWorldSpace = Vector3.new(0, 2.5, 0)
+    billboard.Parent = self.context.uiParent
+
+    local panel = createInstance("Frame")
+    panel.Name = "Panel"
+    panel.BackgroundColor3 = COLORS.panel
+    panel.BackgroundTransparency = 0.04
+    panel.BorderSizePixel = 0
+    panel.Size = UDim2.fromScale(1, 1)
+    panel.Parent = billboard
+
+    local corner = createInstance("UICorner")
+    corner.CornerRadius = UDim.new(0, 3)
+    corner.Parent = panel
+
+    local stroke = createInstance("UIStroke")
+    stroke.Color = COLORS.border
+    stroke.Thickness = 1
+    stroke.Parent = panel
+
+    local accent = createInstance("Frame")
+    accent.Name = "Accent"
+    accent.BackgroundColor3 = COLORS.accent
+    accent.BorderSizePixel = 0
+    accent.Position = UDim2.fromOffset(4, 4)
+    accent.Size = UDim2.new(0, 3, 1, -8)
+    accent.Parent = panel
+
+    local title = createInstance("TextLabel")
+    title.Name = "Title"
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.Code
+    title.Position = UDim2.new(0, 12, 0, 0)
+    title.Size = UDim2.new(0.42, -12, 1, 0)
+    title.Text = "BOMB"
+    title.TextColor3 = COLORS.secondary
+    title.TextSize = 10
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = panel
+
+    local timer = createInstance("TextLabel")
+    timer.Name = "Timer"
+    timer.BackgroundTransparency = 1
+    timer.Font = Enum.Font.Code
+    timer.Position = UDim2.new(0.42, 0, 0, 0)
+    timer.Size = UDim2.new(0.58, -8, 1, 0)
+    timer.Text = "0.0s"
+    timer.TextColor3 = COLORS.text
+    timer.TextSize = 13
+    timer.TextXAlignment = Enum.TextXAlignment.Right
+    timer.Parent = panel
+
+    self.worldGui = {
+        accent = accent,
+        billboard = billboard,
+        panel = panel,
+        stroke = stroke,
+        timer = timer,
+        title = title,
+    }
+    return self.worldGui
+end
+
+function Overlay:_renderBomb(observation, settings)
+    local visible = settings.bombTimer == true
+        and type(observation) == "table"
+        and observation.visible == true
+        and observation.adornee ~= nil
+    if not visible then
+        if self.worldGui then
+            self.worldGui.billboard.Enabled = false
+        end
+        return
+    end
+
+    local gui = self:_ensureBombBillboard()
+    if not gui then
+        return
+    end
+    local presentation = observation.presentation or {}
+    gui.billboard.Adornee = observation.adornee
+    gui.billboard.AlwaysOnTop = presentation.alwaysOnTop == true
+    gui.billboard.Enabled = presentation.visible ~= false
+    gui.billboard.Size = UDim2.fromOffset(presentation.width or 64, presentation.height or 22)
+    local urgent = (observation.remaining or 0) <= 10
+    gui.timer.Text = ("%.1fs"):format(math.max(observation.remaining or 0, 0))
+    gui.timer.TextColor3 = urgent and COLORS.danger or COLORS.text
+    gui.timer.TextSize = presentation.textSize or 13
+    gui.accent.BackgroundColor3 = urgent and COLORS.danger or COLORS.accent
+    gui.stroke.Color = urgent and COLORS.danger or COLORS.border
 end
 
 function Overlay:_getPlayerNodes(player)
@@ -1197,7 +1318,121 @@ function Overlay:_syncBodyPartNodes(nodes, count)
     end
 end
 
-function Overlay:render(observations, mousePosition)
+function Overlay:_getUtilityNodes(index)
+    local nodes = self.utilityNodes[index]
+    if nodes then
+        return nodes
+    end
+
+    nodes = {
+        marker = self.surface:create("Square", {
+            Color = COLORS.accent,
+            Filled = false,
+            Size = Vector2.new(8, 8),
+            Thickness = 1.5,
+            Visible = false,
+            ZIndex = 70,
+        }, { pointerEvents = false }),
+        label = self:_text({
+            Center = true,
+            Color = COLORS.text,
+            Outline = true,
+            Size = 12,
+            Text = "",
+            Visible = false,
+            ZIndex = 71,
+        }),
+    }
+    if not self.immediateUtilityZones then
+        nodes.zones = {}
+    end
+    self.utilityNodes[index] = nodes
+    return nodes
+end
+
+function Overlay:_syncUtilityZones(nodes, count)
+    if not nodes.zones then
+        return
+    end
+    while #nodes.zones < count do
+        table.insert(nodes.zones, self.surface:create("Quad", {
+            Color = COLORS.danger,
+            Filled = true,
+            Transparency = 0.14,
+            Visible = false,
+            ZIndex = 68,
+        }, { pointerEvents = false }))
+    end
+    for index = count + 1, #nodes.zones do
+        nodes.zones[index].Visible = false
+    end
+end
+
+function Overlay:_paintUtilityZones(renderer)
+    local paint = self.utilityZonePaint
+    if not paint.enabled then
+        return
+    end
+
+    for _, observation in ipairs(paint.observations) do
+        local tone = observation.tone
+        local color = tone == "danger" and COLORS.danger
+            or (tone == "smoke" and COLORS.secondary or COLORS.accent)
+        local opacity = tone == "smoke" and 0.08 or 0.14
+        for _, polygon in ipairs(observation.polygons or {}) do
+            if type(polygon) == "table" and #polygon == 4 then
+                renderer.FilledTriangle(polygon[1], polygon[2], polygon[3], color, opacity)
+                renderer.FilledTriangle(polygon[1], polygon[3], polygon[4], color, opacity)
+            end
+        end
+    end
+end
+
+function Overlay:_renderUtilities(observations, enabled)
+    observations = observations or {}
+    self.utilityZonePaint.enabled = enabled == true
+    self.utilityZonePaint.observations = observations
+    for index, observation in ipairs(observations) do
+        local nodes = self:_getUtilityNodes(index)
+        local tone = observation.tone
+        local color = tone == "danger" and COLORS.danger
+            or (tone == "smoke" and COLORS.secondary or COLORS.accent)
+        local markerVisible = enabled and observation.onScreen == true and observation.screenPosition ~= nil
+        if markerVisible then
+            nodes.marker.Position = observation.screenPosition - Vector2.new(4, 4)
+            nodes.label.Position = observation.screenPosition + Vector2.new(0, 8)
+        end
+        nodes.marker.Color = color
+        nodes.marker.Visible = markerVisible
+        nodes.label.Color = color
+        nodes.label.Text = observation.label or ""
+        nodes.label.Visible = markerVisible
+
+        local polygons = enabled and observation.polygons or {}
+        if not self.immediateUtilityZones then
+            self:_syncUtilityZones(nodes, #polygons)
+            for polygonIndex, polygon in ipairs(polygons) do
+                local zone = nodes.zones[polygonIndex]
+                local visible = type(polygon) == "table" and #polygon == 4
+                if visible then
+                    zone.PointA = polygon[1]
+                    zone.PointB = polygon[2]
+                    zone.PointC = polygon[3]
+                    zone.PointD = polygon[4]
+                end
+                zone.Color = color
+                zone.Transparency = tone == "smoke" and 0.08 or 0.14
+                zone.Visible = visible
+            end
+        end
+    end
+
+    for index = #observations + 1, #self.utilityNodes do
+        setVisible(self.utilityNodes[index], false)
+    end
+end
+
+function Overlay:render(observations, mousePosition, utilityObservations)
     if self.destroyed then
         return
     end
@@ -1277,6 +1512,7 @@ function Overlay:render(observations, mousePosition)
             setVisible(nodes, false)
         end
     end
+    self:_renderUtilities(utilityObservations, settings.utilityEsp == true)
 end
 
 function Overlay:isCaptured()
@@ -1295,8 +1531,13 @@ function Overlay:destroy()
     if self.unsubscribe then
         self.unsubscribe()
     end
+    if self.worldGui then
+        self.worldGui.billboard:Destroy()
+        self.worldGui = nil
+    end
     self.surface:destroy()
     table.clear(self.playerNodes)
+    table.clear(self.utilityNodes)
 end
 
 return Overlay

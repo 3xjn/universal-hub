@@ -34,11 +34,13 @@ The menu inherits Hydroxide's generated-code and tooling identity while remainin
 - A visual control whose Drawing primitive is unavailable on the active executor remains visible but reads `N/A` and cannot publish a misleading enabled state
 - Cuboid faces use 0.18 Drawing opacity. Each body part uses the same five-point visibility sample as targeting: green means at least one sampled point is on-screen and directly shootable, red means every sampled point is blocked
 - Health is a 4 px vertical track anchored 7 px left of the projected character bounds. Its 2 px inner fill rises from the bottom, interpolating from blocked/error red at zero health to active/visible green at full health.
+- World utility observations reuse the existing palette and overlay surface. Moving throwables receive a compact marker and label; replicated fire and smoke voxels are projected into one immediate Drawing triangle mesh per paint pass, avoiding a retained object per tile while preserving the exact server-authored affected area rather than estimating a radius. Executors without immediate paint support fall back to retained translucent quads.
+- A planted-bomb marker is a small distance-scaled `BillboardGui` anchored above the replicated bomb. Its dark panel uses the standard border, a 3 px semantic accent rail, a secondary `BOMB` eyebrow, and a separate high-contrast countdown; the final ten seconds turn only the rail, border, and countdown red. It uses the server-time plant payload, stays hidden beyond its configured range, becomes through-wall readable only at useful nearby distances, and is lifecycle-owned by the overlay so it cannot survive a reload or round cleanup.
 - The legacy projected-bounds rectangle is only a compatibility fallback when an adapter cannot publish body-part observations
 
 ## State contract
 
-`modules/Store.lua` is the single reactive seam. The adapter publishes live weapon, status, target, and observations. The overlay subscribes to that state and sends option changes back through the session. No game adapter reaches into Drawing controls directly.
+`modules/Store.lua` is the single reactive seam. The adapter publishes live weapon, status, target, character observations, bomb state, and utility observations. The overlay subscribes to that state and sends option changes back through the session. No game adapter reaches into Drawing controls directly.
 
 Menu visibility is live UI state, not a combat setting. Hiding the menu releases pointer capture and affects only panel controls; enabled FOV and character overlays continue rendering.
 
