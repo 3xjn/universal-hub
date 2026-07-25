@@ -92,6 +92,14 @@ local BODY_CUBE_FACES = {
 }
 
 local BODY_CUBE_OPACITY = 0.18
+local COSMETIC_WEAPON_CONTROLS = {
+    weaponBackground = true,
+    weaponName = true,
+    weaponNext = true,
+    weaponNextLabel = true,
+    weaponPrevious = true,
+    weaponPreviousLabel = true,
+}
 
 local function setVisible(nodes, visible)
     for _, node in pairs(nodes) do
@@ -491,6 +499,51 @@ function Overlay:_build()
             Visible = false,
             ZIndex = 203,
         }),
+        weaponBackground = surface:create("Square", {
+            Color = COLORS.panel,
+            Filled = true,
+            Size = Vector2.new(208, 30),
+            Visible = false,
+            ZIndex = 202,
+        }, { pointerEvents = false }),
+        weaponName = self:_text({
+            Center = true,
+            Color = COLORS.text,
+            Size = 13,
+            Text = "Weapon",
+            Visible = false,
+            ZIndex = 203,
+        }),
+        weaponNext = self:_capture(surface:create("Square", {
+            Color = COLORS.elevated,
+            Filled = true,
+            Size = Vector2.new(30, 30),
+            Visible = false,
+            ZIndex = 202,
+        })),
+        weaponNextLabel = self:_text({
+            Center = true,
+            Color = COLORS.text,
+            Size = 15,
+            Text = ">",
+            Visible = false,
+            ZIndex = 203,
+        }),
+        weaponPrevious = self:_capture(surface:create("Square", {
+            Color = COLORS.elevated,
+            Filled = true,
+            Size = Vector2.new(30, 30),
+            Visible = false,
+            ZIndex = 202,
+        })),
+        weaponPreviousLabel = self:_text({
+            Center = true,
+            Color = COLORS.text,
+            Size = 15,
+            Text = "<",
+            Visible = false,
+            ZIndex = 203,
+        }),
         next = self:_capture(surface:create("Square", {
             Color = COLORS.elevated,
             Filled = true,
@@ -679,6 +732,12 @@ function Overlay:_build()
     controls.cosmetics.gloveMode:on("click", function()
         self.context.setCosmeticMode("gloves")
     end)
+    controls.cosmetics.weaponPrevious:on("click", function()
+        self.context.cycleCosmeticWeapon(-1)
+    end)
+    controls.cosmetics.weaponNext:on("click", function()
+        self.context.cycleCosmeticWeapon(1)
+    end)
     controls.cosmetics.previous:on("click", function()
         if self.context.store:Get().cosmeticMode == "gloves" then
             self.context.cycleGlove(-1)
@@ -853,27 +912,34 @@ function Overlay:_layout()
     cosmetics.weaponModeLabel.Position = Vector2.new(x + 79, sectionY + 37)
     cosmetics.gloveMode.Position = Vector2.new(x + 154, sectionY + 30)
     cosmetics.gloveModeLabel.Position = Vector2.new(x + 221, sectionY + 37)
-    cosmetics.previous.Position = Vector2.new(x + 12, sectionY + 58)
-    cosmetics.previousLabel.Position = Vector2.new(x + 27, sectionY + 65)
-    cosmetics.skinBackground.Position = Vector2.new(x + 46, sectionY + 58)
-    cosmetics.skinName.Position = Vector2.new(x + 150, sectionY + 66)
-    cosmetics.next.Position = Vector2.new(x + 258, sectionY + 58)
-    cosmetics.nextLabel.Position = Vector2.new(x + 273, sectionY + 65)
-    cosmetics.wearLabel.Position = Vector2.new(x + 12, sectionY + 94)
-    cosmetics.wearValue.Position = Vector2.new(x + 264, sectionY + 94)
+    cosmetics.weaponPrevious.Position = Vector2.new(x + 12, sectionY + 58)
+    cosmetics.weaponPreviousLabel.Position = Vector2.new(x + 27, sectionY + 65)
+    cosmetics.weaponBackground.Position = Vector2.new(x + 46, sectionY + 58)
+    cosmetics.weaponName.Position = Vector2.new(x + 150, sectionY + 66)
+    cosmetics.weaponNext.Position = Vector2.new(x + 258, sectionY + 58)
+    cosmetics.weaponNextLabel.Position = Vector2.new(x + 273, sectionY + 65)
+    local weaponOffset = self.cosmeticMode == "weapon" and 34 or 0
+    cosmetics.previous.Position = Vector2.new(x + 12, sectionY + 58 + weaponOffset)
+    cosmetics.previousLabel.Position = Vector2.new(x + 27, sectionY + 65 + weaponOffset)
+    cosmetics.skinBackground.Position = Vector2.new(x + 46, sectionY + 58 + weaponOffset)
+    cosmetics.skinName.Position = Vector2.new(x + 150, sectionY + 66 + weaponOffset)
+    cosmetics.next.Position = Vector2.new(x + 258, sectionY + 58 + weaponOffset)
+    cosmetics.nextLabel.Position = Vector2.new(x + 273, sectionY + 65 + weaponOffset)
+    cosmetics.wearLabel.Position = Vector2.new(x + 12, sectionY + 94 + weaponOffset)
+    cosmetics.wearValue.Position = Vector2.new(x + 264, sectionY + 94 + weaponOffset)
     self.wearStartX = x + 12
-    cosmetics.wearHit.Position = Vector2.new(x + 12, sectionY + 106)
-    cosmetics.wearTrack.Position = Vector2.new(x + 12, sectionY + 115)
+    cosmetics.wearHit.Position = Vector2.new(x + 12, sectionY + 106 + weaponOffset)
+    cosmetics.wearTrack.Position = Vector2.new(x + 12, sectionY + 115 + weaponOffset)
     cosmetics.wearFill.Position = cosmetics.wearTrack.Position
-    cosmetics.statTrak.Position = Vector2.new(x + 12, sectionY + 132)
-    cosmetics.statTrakLabel.Position = Vector2.new(x + 21, sectionY + 140)
-    cosmetics.statTrakValue.Position = Vector2.new(x + 124, sectionY + 140)
-    cosmetics.reset.Position = Vector2.new(x + 154, sectionY + 132)
-    cosmetics.resetLabel.Position = Vector2.new(x + 163, sectionY + 140)
+    cosmetics.statTrak.Position = Vector2.new(x + 12, sectionY + 132 + weaponOffset)
+    cosmetics.statTrakLabel.Position = Vector2.new(x + 21, sectionY + 140 + weaponOffset)
+    cosmetics.statTrakValue.Position = Vector2.new(x + 124, sectionY + 140 + weaponOffset)
+    cosmetics.reset.Position = Vector2.new(x + 154, sectionY + 132 + weaponOffset)
+    cosmetics.resetLabel.Position = Vector2.new(x + 163, sectionY + 140 + weaponOffset)
     self.colorStartX = x + 32
     for index, channelName in ipairs({ "r", "g", "b" }) do
         local channel = cosmetics.colorChannels[channelName]
-        local channelY = sectionY + 166 + (index - 1) * 24
+        local channelY = sectionY + 166 + weaponOffset + (index - 1) * 24
         channel.label.Position = Vector2.new(x + 12, channelY + 4)
         channel.hit.Position = Vector2.new(x + 32, channelY)
         channel.track.Position = Vector2.new(x + 32, channelY + 8)
@@ -924,6 +990,10 @@ function Overlay:_setMenuVisible(visible)
                         cosmeticsVisible and self.cosmeticsOpen == true and self.gloveColorVisible == true
                     )
                 end
+            elseif COSMETIC_WEAPON_CONTROLS[name] then
+                node.Visible = cosmeticsVisible
+                    and self.cosmeticsOpen == true
+                    and self.cosmeticMode == "weapon"
             else
                 node.Visible = cosmeticsVisible and self.cosmeticsOpen == true
             end
@@ -943,6 +1013,7 @@ function Overlay:_renderState(state)
         return
     end
 
+    self.cosmeticMode = state.cosmeticMode == "gloves" and "gloves" or "weapon"
     self:_layout()
     local settings = state.settings
     local controls = self.controls
@@ -991,13 +1062,14 @@ function Overlay:_renderState(state)
     controls.fovCircle.Radius = settings.fov
     controls.fovCircle.Visible = settings.fovCircle ~= false and not settings.fullScreenAim
 
-    local cosmeticMode = state.cosmeticMode == "gloves" and "gloves" or "weapon"
+    local cosmeticMode = self.cosmeticMode
     local gloveColor = settings.gloveColorOverride
     self.gloveColorVisible = cosmeticMode == "gloves" and type(gloveColor) == "table"
     local collapsedHeight = (self.optionsPanelHeight or 560) + 36
     controls.panel.Size = Vector2.new(300, if self.cosmeticsSupported
         then (self.cosmeticsOpen
-            and (collapsedHeight + (self.gloveColorVisible and 202 or 128))
+            and (collapsedHeight
+                + (cosmeticMode == "weapon" and 162 or (self.gloveColorVisible and 202 or 128)))
             or collapsedHeight)
         else (self.optionsPanelHeight or 596))
     local cosmetics = cosmeticMode == "gloves" and (state.gloves or {}) or (state.cosmetics or {})
@@ -1015,7 +1087,8 @@ function Overlay:_renderState(state)
         cosmeticMode == "weapon" and (cosmetics.weapon or "Weapon") or "Weapons"
     cosmeticControls.gloveModeLabel.Text =
         cosmeticMode == "gloves" and (cosmetics.weapon or "Gloves") or "Gloves"
-    cosmeticControls.skinName.Text = cosmetics.skin or "Stock"
+    cosmeticControls.weaponName.Text = state.cosmeticWeapon or state.activeWeapon or "Select weapon"
+    cosmeticControls.skinName.Text = cosmetics.skinLabel or cosmetics.skin or "Stock"
     cosmeticControls.wearValue.Text = ("%.2f"):format(cosmetics.wear or 0)
     cosmeticControls.wearFill.Size = Vector2.new(276 * wearAlpha, 4)
     cosmeticControls.wearKnob.Position =

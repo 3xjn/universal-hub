@@ -38,7 +38,8 @@ local store = Store.new({
     cosmetics = {
         maximumWear = 0.15,
         minimumWear = 0,
-        skin = "PinPoint",
+        skin = "Nebula_PATTERN_11",
+        skinLabel = "Nebula (Pattern 11)",
         skinCount = 8,
         skinIndex = 2,
         statTrak = true,
@@ -96,6 +97,7 @@ local captures = {}
 local menuVisibilityChanges = {}
 local cosmeticsVisibilityChanges = {}
 local cosmeticActions = {}
+local cosmeticWeaponChanges = {}
 local overlay = Overlay.new({
     capabilities = {
         "aimSmoothness",
@@ -124,6 +126,9 @@ local overlay = Overlay.new({
     end,
     cycleSkin = function(direction)
         table.insert(cosmeticActions, { action = "cycle", value = direction })
+    end,
+    cycleCosmeticWeapon = function(direction)
+        table.insert(cosmeticWeaponChanges, direction)
     end,
     drawing = {
         createSurface = function()
@@ -279,12 +284,21 @@ assert(
 overlay.controls.cosmetics.header.callbacks.click()
 assert(cosmeticsVisibilityChanges[1] == true)
 store:Patch({ cosmeticsOpen = true })
-assert(overlay.controls.panel.Size.Y == 826)
-assert(overlay.controls.cosmetics.skinName.Text == "PinPoint")
+assert(overlay.controls.panel.Size.Y == 860)
+assert(
+    overlay.controls.cosmetics.skinName.Text == "Nebula (Pattern 11)",
+    "Cosmetic controls must show the readable variant label without replacing its raw ID"
+)
 assert(overlay.controls.cosmetics.weaponModeLabel.Text == "AK-47")
 assert(overlay.controls.cosmetics.gloveModeLabel.Text == "Gloves")
 assert(overlay.controls.cosmetics.weaponMode.Color == Color3.fromRGB(23, 53, 45))
 assert(overlay.controls.cosmetics.gloveMode.Color == Color3.fromRGB(21, 28, 35))
+overlay.controls.cosmetics.weaponPrevious.callbacks.click()
+overlay.controls.cosmetics.weaponNext.callbacks.click()
+assert(
+    cosmeticWeaponChanges[1] == -1 and cosmeticWeaponChanges[2] == 1,
+    "Weapon selector arrows must browse cosmetics independently of the equipped weapon"
+)
 overlay.controls.cosmetics.previous.callbacks.click()
 overlay.controls.cosmetics.next.callbacks.click()
 overlay.controls.cosmetics.statTrak.callbacks.click()

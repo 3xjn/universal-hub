@@ -279,6 +279,18 @@ local skinsModule = {
                     skin = "Fade",
                     supportsStatTrak = true,
                 },
+                {
+                    floatRange = { min = 0, max = 0.08 },
+                    name = "Karambit",
+                    skin = "Nebula_PATTERN_1",
+                    supportsStatTrak = true,
+                },
+                {
+                    floatRange = { min = 0, max = 0.08 },
+                    name = "Karambit",
+                    skin = "Nebula_PATTERN_2",
+                    supportsStatTrak = true,
+                },
             }
         elseif name == "T Knife" then
             return {}
@@ -344,6 +356,7 @@ local replicatedStorage = {
         Weapons = {
             GetChildren = function()
                 return {
+                    { Name = "AK-47" },
                     { Name = "CT Glove" },
                     { Name = "Driver Gloves" },
                     { Name = "Karambit" },
@@ -410,6 +423,8 @@ local localPlayer = {
         return nil
     end,
 }
+local spectatedCharacter
+local spectatedPlayer
 local existingViewmodelDestroyCalls = 0
 local existingLiveComponent = {
     Float = 0,
@@ -435,6 +450,12 @@ local encodedGloveValue
 local services = {
     Players = {
         LocalPlayer = localPlayer,
+        GetPlayerFromCharacter = function(_, character)
+            if character == spectatedCharacter then
+                return spectatedPlayer
+            end
+            return nil
+        end,
     },
     HttpService = {
         JSONDecode = function()
@@ -605,7 +626,7 @@ local initialized, adapter = pcall(Counterblox.new, {
         Get = function()
             return adapterState
         end,
-        Patch = function(patch)
+        Patch = function(_, patch)
             local function merge(target, source)
                 for key, value in pairs(source) do
                     if type(value) == "table" and type(target[key]) == "table" then
@@ -662,8 +683,33 @@ assert(
     adapter.isOpponent(sameTeamPlayer, livingCharacter) == false,
     "ESP must exclude the character currently followed by the spectating camera"
 )
-currentCamera.CameraSubject = nil
 gameMode = "Competitive"
+spectatedCharacter = {}
+spectatedPlayer = {
+    GetAttribute = function(_, name)
+        return name == "Team" and "CT" or nil
+    end,
+}
+currentCamera.CameraSubject = {
+    Parent = spectatedCharacter,
+    IsDescendantOf = function(_, ancestor)
+        return ancestor == spectatedCharacter
+    end,
+}
+assert(
+    adapter.isOpponent(sameTeamPlayer, livingCharacter) == true,
+    "Spectator ESP must classify opponents relative to the followed player's team"
+)
+local spectatedAllyPlayer = {
+    GetAttribute = function(_, name)
+        return name == "Team" and "CT" or nil
+    end,
+}
+assert(
+    adapter.isOpponent(spectatedAllyPlayer, livingCharacter) == false,
+    "Spectator ESP must exclude allies of the followed player"
+)
+currentCamera.CameraSubject = nil
 assert(
     hookImplementations[bulletModule.getTrueSpread],
     "No Spread must hook Bullet.getTrueSpread, the value consumed before raycast"
@@ -750,7 +796,13 @@ adapter:resetSkin()
 assert(adapterState.settings.skinOverrides["AK-47"].skin == "Stock")
 assert(adapterState.settingsChanged == 4, "Every cosmetic change must request per-game persistence")
 
-adapterState.activeWeapon = "T Knife"
+adapter:cycleCosmeticWeapon(1)
+assert(
+    adapterState.activeWeapon == "AK-47"
+        and adapterState.cosmeticWeapon == "T Knife"
+        and adapterState.cosmetics.weapon == "T Knife",
+    "Cosmetic weapon selection must move independently of the equipped weapon"
+)
 adapter:cycleSkin(1)
 local knifeOverride = adapterState.settings.skinOverrides["T Knife"]
 assert(knifeOverride.weapon == "Karambit", "Stock knives must cycle into other melee weapon families")
@@ -772,7 +824,49 @@ local knifeComponent = hookImplementations[weaponComponentModule.new](
 assert(weaponNewArguments[5] == "T Knife", "Knife cosmetics must preserve the server-backed weapon identity")
 assert(knifeComponent.Name == "T Knife")
 assert(viewmodelNewArguments.name == "Karambit" and viewmodelNewArguments.skin == "Stock")
-adapterState.activeWeapon = "AK-47"
+
+adapter:cycleSkin(1)
+adapter:cycleSkin(1)
+local patternedKnifeOverride = adapterState.settings.skinOverrides["T Knife"]
+assert(
+    patternedKnifeOverride.skin == "Nebula_PATTERN_1",
+    "Knife pattern variants must retain the game's exact skin identifier"
+)
+assert(
+    adapterState.cosmetics.skin == "Nebula_PATTERN_1"
+        and adapterState.cosmetics.skinLabel == "Nebula (Pattern 1)",
+    "Published cosmetics must keep the raw identifier separate from its readable label"
+)
+hookImplementations[weaponComponentModule.new](
+    localPlayer,
+    "patterned-knife-identifier",
+    "patterned-knife-id",
+    3,
+    "T Knife",
+    "Stock",
+    0,
+    false,
+    nil,
+    nil,
+    nil,
+    nil
+)
+assert(
+    viewmodelNewArguments.name == "Karambit"
+        and viewmodelNewArguments.skin == "Nebula_PATTERN_1",
+    "The viewmodel must receive the exact numbered pattern rather than its display label"
+)
+adapter:cycleSkin(1)
+assert(
+    adapterState.settings.skinOverrides["T Knife"].skin == "Nebula_PATTERN_2"
+        and adapterState.cosmetics.skinLabel == "Nebula (Pattern 2)",
+    "Adjacent numbered patterns must remain distinct selectable cosmetics"
+)
+assert(
+    adapterState.settings.skinOverrides["T Knife"].weapon == "Karambit"
+        and adapterState.settings.skinOverrides["AK-47"].skin == "Stock",
+    "Changing an unequipped weapon must store its override without changing the equipped weapon"
+)
 
 adapter:cycleGlove(1)
 assert(adapterState.settings.gloveOverride.weapon == "CT Glove")
@@ -1071,6 +1165,10 @@ local initialRootLinearVelocity = Vector3.new(7, 0, -3)
 root.AssemblyLinearVelocity = initialRootLinearVelocity
 local initialRootJointC0 = rootJoint.C0
 local initialRootJointTransform = rootJoint.Transform
+local expectedBhopSpeedCeiling = math.max(
+    initialRootLinearVelocity.Magnitude,
+    humanoid.WalkSpeed * 1.35
+)
 currentCamera.CFrame = roblox.CFrame.new()
 renderCallback(0.0625)
 assert(humanoid.Jump == true, "Bunny Hop must jump only through the live humanoid")
@@ -1098,7 +1196,7 @@ assert(
 )
 assert(
     root.AssemblyLinearVelocity.X > initialRootLinearVelocity.X
-        and root.AssemblyLinearVelocity.Magnitude <= humanoid.WalkSpeed + 0.001,
+        and root.AssemblyLinearVelocity.Magnitude <= expectedBhopSpeedCeiling + 0.001,
     "Bunny Hop movement input must add acceleration without discarding perpendicular momentum"
 )
 local acceleratedVelocity = root.AssemblyLinearVelocity
@@ -1116,15 +1214,18 @@ assert(
         and root.AssemblyLinearVelocity.Magnitude >= acceleratedVelocity.Magnitude,
     "Bunny Hop strafing must bend retained momentum toward movement input without losing speed"
 )
-local speedCeiling = math.max(initialRootLinearVelocity.Magnitude, humanoid.WalkSpeed)
 for _ = 1, 60 do
     local velocity = root.AssemblyLinearVelocity
     movementDirection = Vector3.new(-velocity.Z, 0, velocity.X).Unit
     renderCallback(0.016)
 end
 assert(
-    root.AssemblyLinearVelocity.Magnitude <= speedCeiling + 0.001,
-    "Bunny Hop strafing must not accumulate server-rejected horizontal speed"
+    root.AssemblyLinearVelocity.Magnitude > humanoid.WalkSpeed + 0.5,
+    "Bunny Hop must build useful speed above normal walking through sustained air strafing"
+)
+assert(
+    root.AssemblyLinearVelocity.Magnitude <= expectedBhopSpeedCeiling + 0.001,
+    "Bunny Hop strafing must keep its boosted horizontal speed bounded"
 )
 assert(thirdPersonStates[#thirdPersonStates] == true, "Spin Bot must request third-person view")
 assert(characterPart.LocalTransparencyModifier == 0, "Third person must reveal the local character")

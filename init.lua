@@ -119,6 +119,7 @@ end
 local store = Store.new({
     activeWeapon = nil,
     activeWeaponKind = nil,
+    cosmeticWeapon = nil,
     cosmetics = {
         maximumWear = 1,
         minimumWear = 0,
@@ -212,6 +213,9 @@ overlay = Overlay.new({
     end,
     cycleSkin = function(direction)
         adapter:cycleSkin(direction)
+    end,
+    cycleCosmeticWeapon = function(direction)
+        adapter:cycleCosmeticWeapon(direction)
     end,
     resetSkin = function()
         adapter:resetSkin()

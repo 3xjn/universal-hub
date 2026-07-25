@@ -12,6 +12,7 @@ local KNIFE_EXTRA_REACH = 3
 local KNIFE_FALLBACK_RANGE = 7
 local KNIFE_MICRO_STEP = 0.75
 local BHOP_AIR_ACCELERATION = 10
+local BHOP_SPEED_MULTIPLIER = 1.35
 local SPIN_SPEED = math.rad(1440)
 local THIRD_PERSON_DISTANCE = 8
 local MOVEMENT_RENDER_STEP = "UniversalHubCounterbloxMovement"
@@ -34,6 +35,14 @@ function Counterblox.match(context)
         return 100
     end
     return 0
+end
+
+function Counterblox.cosmeticLabel(skin)
+    local base, pattern = string.match(skin, "^(.-)_PATTERN_(%d+)$")
+    if base then
+        return ("%s (Pattern %s)"):format(base, pattern)
+    end
+    return skin
 end
 
 local function targetVisible(target)
@@ -211,7 +220,9 @@ function Counterblox.new(context)
     local lastGloveKey
     local cosmeticCatalogCache = {}
     local cosmeticOverrideCache = {}
+    local cosmeticWeaponCache
     local gloveCatalogCache
+    local selectedCosmeticWeapon
     local trackedComponents = setmetatable({}, { __mode = "k" })
     local characterTransparency = setmetatable({}, { __mode = "k" })
     local viewmodelTransparency = setmetatable({}, { __mode = "k" })
@@ -271,6 +282,16 @@ function Counterblox.new(context)
             and (subject == character or subject.Parent == character or subject:IsDescendantOf(character))
     end
 
+    local function spectatedPlayer()
+        local camera = Workspace.CurrentCamera
+        local subject = camera and camera.CameraSubject
+        if not subject then
+            return nil
+        end
+        return Players:GetPlayerFromCharacter(subject)
+            or subject.Parent and Players:GetPlayerFromCharacter(subject.Parent)
+    end
+
     local function isOpponent(player, character)
         if player == LocalPlayer or not character or character:GetAttribute("Dead") == true then
             return false
@@ -279,7 +300,8 @@ function Counterblox.new(context)
             return false
         end
 
-        local localTeam = LocalPlayer:GetAttribute("Team")
+        local referencePlayer = spectatedPlayer() or LocalPlayer
+        local localTeam = referencePlayer:GetAttribute("Team")
         local playerTeam = player:GetAttribute("Team")
         local gameMode = Workspace:GetAttribute("Gamemode")
         local serverGameMode = Workspace:GetAttribute("ServerGamemode")
@@ -366,6 +388,28 @@ function Counterblox.new(context)
             end
         end
         return weaponClassFromAsset({ Name = weaponName })
+    end
+
+    local function cosmeticWeapons()
+        if cosmeticWeaponCache then
+            return cosmeticWeaponCache
+        end
+
+        local weapons = {}
+        for _, asset in ipairs(ReplicatedStorage.Assets.Weapons:GetChildren()) do
+            local class = weaponClassFromAsset(asset)
+            local isBaseMelee = asset.Name == "T Knife" or asset.Name == "CT Knife"
+            if class ~= "Glove" and (class ~= "Melee" or isBaseMelee) then
+                table.insert(weapons, asset.Name)
+            end
+        end
+        table.sort(weapons)
+        cosmeticWeaponCache = weapons
+        return weapons
+    end
+
+    local function currentCosmeticWeapon()
+        return selectedCosmeticWeapon or store:Get().activeWeapon or lastEquippedName
     end
 
     local function cosmeticCatalog(weaponName)
@@ -589,6 +633,7 @@ function Counterblox.new(context)
                 maximumWear = range.max or 1,
                 minimumWear = range.min or 0,
                 skin = override.skin,
+                skinLabel = Counterblox.cosmeticLabel(override.skin),
                 skinCount = #catalog,
                 skinIndex = index,
                 statTrak = override.statTrak == true,
@@ -1219,7 +1264,10 @@ function Counterblox.new(context)
             local moveDirection = movementDirection and movementDirection() or humanoid.MoveDirection
             if not bhopMomentum then
                 bhopMomentum = Vector3.new(velocity.X, 0, velocity.Z)
-                bhopSpeedLimit = math.max(bhopMomentum.Magnitude, humanoid.WalkSpeed)
+                bhopSpeedLimit = math.max(
+                    bhopMomentum.Magnitude,
+                    humanoid.WalkSpeed * BHOP_SPEED_MULTIPLIER
+                )
             end
             if moveDirection.Magnitude > 0.001 then
                 local direction = moveDirection.Unit
@@ -1284,12 +1332,17 @@ function Counterblox.new(context)
             lastEquippedName = activeWeapon
             activeWeaponKind = equippedKind
         end
-        publishCosmetics(activeWeapon)
+        if not selectedCosmeticWeapon and activeWeapon then
+            selectedCosmeticWeapon = activeWeapon
+        end
+        local cosmeticWeapon = currentCosmeticWeapon()
+        publishCosmetics(cosmeticWeapon)
         publishGloves()
         local visibleCount = updateObservations()
         store:Patch({
             activeWeapon = activeWeapon,
             activeWeaponKind = activeWeaponKind,
+            cosmeticWeapon = cosmeticWeapon,
             observations = observations,
             status = ("%d enemies · %d visible"):format(#observations, visibleCount),
         })
@@ -1350,8 +1403,22 @@ function Counterblox.new(context)
     self.classify = Counterblox.classifyWeapon
     self.isOpponent = isOpponent
     self.selectTarget = selectTarget
+    function self:cycleCosmeticWeapon(direction)
+        local weapons = cosmeticWeapons()
+        if #weapons == 0 then
+            return
+        end
+        local index = table.find(weapons, currentCosmeticWeapon())
+        if not index then
+            index = direction > 0 and 0 or 1
+        end
+        selectedCosmeticWeapon = weapons[((index - 1 + direction) % #weapons) + 1]
+        lastCosmeticKey = nil
+        publishCosmetics(selectedCosmeticWeapon)
+        store:Patch({ cosmeticWeapon = selectedCosmeticWeapon })
+    end
     function self:cycleSkin(direction)
-        local weaponName = store:Get().activeWeapon or lastEquippedName
+        local weaponName = currentCosmeticWeapon()
         if not weaponName then
             return
         end
@@ -1368,7 +1435,7 @@ function Counterblox.new(context)
         setCosmetic(weaponName, schema, range.min, false)
     end
     function self:setWear(alpha)
-        local weaponName = store:Get().activeWeapon or lastEquippedName
+        local weaponName = currentCosmeticWeapon()
         local current = weaponName and cosmeticOverride(weaponName)
         if not weaponName or not current then
             return
@@ -1383,7 +1450,7 @@ function Counterblox.new(context)
         )
     end
     function self:toggleStatTrak()
-        local weaponName = store:Get().activeWeapon or lastEquippedName
+        local weaponName = currentCosmeticWeapon()
         local current = weaponName and cosmeticOverride(weaponName)
         if not weaponName or not current then
             return
@@ -1394,7 +1461,7 @@ function Counterblox.new(context)
         end
     end
     function self:resetSkin()
-        local weaponName = store:Get().activeWeapon or lastEquippedName
+        local weaponName = currentCosmeticWeapon()
         if weaponName then
             setCosmetic(weaponName, cosmeticCatalog(weaponName)[1], 0, false)
         end
