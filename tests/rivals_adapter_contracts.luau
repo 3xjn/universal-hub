@@ -654,7 +654,7 @@ assert(
         and knifeApproach.movePosition == knifeApproach.approachPosition
         and #knifeApproach.path == 3
         and knifeApproach.approachPosition.X < knifeTargetRoot.Position.X,
-    "Knife Movement must take the fastest direct pass-through route to the target's rear"
+    "Knife backstab planning must use the nearest lethal rear position"
 )
 assert(
     Rivals.backstabReady(Vector3.new(3, 0, 6), knifeObservation, knifeInfo) == true,
@@ -774,7 +774,11 @@ local fighterScript = {}
 local controlsScript = {}
 local mechanicsScript = {}
 local toggledInputs = {}
+local wHeld = false
 local controlsModule = {
+    IsToggled = function(_self, input)
+        return toggledInputs[input.Name] == true
+    end,
     ToggleInput = function(_self, input, enabled)
         toggledInputs[input.Name] = enabled == true or nil
     end,
@@ -829,7 +833,6 @@ local RunService = {
     },
 }
 local mousePosition = Vector2.new(640, 360)
-local wHeld = false
 local movementDirection = Vector3.zero
 local UserInputService = {
     GetMouseLocation = function()
@@ -1066,7 +1069,6 @@ local settings = {
     fullScreenAim = false,
     headshotRate = 0,
     humanAim = false,
-    knifeMovement = false,
     missRate = 0,
     shotAim = false,
     silentAim = true,
@@ -1747,108 +1749,8 @@ localItem.Info = {
 }
 observations[1].visible = true
 observations[1].screenDistance = settings.fov + 100
-settings.knifeMovement = true
-wHeld = true
-currentTime += 1
-local approachClicks = clicks
-local approachAimClicks = aimClicks
-local approachRotations = rotationCalls
-renderCallback()
-local runtimeKnifePlan = Rivals.backstabPlan(
-    fighterModule.LocalFighter.Entity.RootPart.Position,
-    observations[1],
-    localItem.Info,
-    128
-)
-assert(
-    rotationCalls == approachRotations + 1
-        and cameraModule.Rotation
-            == Rivals.rotationToward(
-                Workspace.CurrentCamera.CFrame.Position,
-                Workspace.CurrentCamera.CFrame.Position + Vector3.xAxis
-            ),
-    "Holding W must face opposite the travel vector so the direct approach is a backward slide"
-)
-assert(
-    clicks == approachClicks and aimClicks == approachAimClicks,
-    "Knife Trigger Bot must wait until the guided backstab position is actually ready"
-)
-assert(
-    not toggledInputs.S
-        and toggledInputs.LeftShift
-        and toggledInputs.C
-        and not toggledInputs.Space,
-    ("Holding W with Knife Movement must begin a sprint-slide without synthetic backward input (S=%s Shift=%s C=%s Space=%s)"):format(
-        tostring(toggledInputs.S),
-        tostring(toggledInputs.LeftShift),
-        tostring(toggledInputs.C),
-        tostring(toggledInputs.Space)
-    )
-)
-assert(slideCalls == 1, "Knife Movement must invoke the live RIVALS slide mechanic")
-assert(
-    fighterModule.LocalFighter:GetMoveVector() == -Vector3.xAxis
-        and runtimeKnifePlan.movePosition == runtimeKnifePlan.approachPosition,
-    "Knife Movement must convert held W into the direct pass-through route"
-)
-sliding = true
-grounded = true
-currentTime += 0.05
-renderCallback()
-assert(
-    not toggledInputs.Space,
-    "Knife Movement must preserve one complete confirmed slide frame before jumping"
-)
-currentTime += 1 / 60
-renderCallback()
-assert(
-    toggledInputs.Space and highJumpCalls == 1,
-    "Knife Movement must invoke the live RIVALS high-jump mechanic after slide momentum is established"
-)
-grounded = false
-currentTime += 1 / 60
-renderCallback()
-assert(
-    not toggledInputs.S
-        and toggledInputs.LeftShift
-        and not toggledInputs.C
-        and not toggledInputs.Space,
-    "Knife Movement must release crouch and jump on the next frame while preserving sprint"
-)
-sliding = false
-grounded = true
-canSlide = false
-currentTime += 1 / 60
-renderCallback()
-assert(
-    toggledInputs.LeftShift and not toggledInputs.C and not toggledInputs.Space,
-    "Knife Movement must keep crouch released while the slide cooldown is unavailable"
-)
-canSlide = true
-currentTime += 1 / 60
-renderCallback()
-assert(
-    toggledInputs.LeftShift and toggledInputs.C and not toggledInputs.Space,
-    "Knife Movement must create a fresh crouch press on the first frame CanSlide becomes true"
-)
-assert(
-    trajectoryNodes[1].properties.Visible and trajectoryNodes[2].properties.Visible,
-    "Knife approach guidance must visualize the path into backstab position"
-)
-
-wHeld = false
-renderCallback()
-assert(
-    not toggledInputs.LeftShift
-        and not toggledInputs.C
-        and not toggledInputs.Space
-        and fighterModule.LocalFighter:GetMoveVector() == originalMoveVector,
-    "Releasing physical W must immediately restore normal movement and clear synthetic inputs"
-)
-
 fighterModule.LocalFighter.Entity.RootPart.Position = targetPosition + Vector3.xAxis * 1.5
 fighterModule.LocalFighter.Entity.RootPart.AssemblyLinearVelocity = -Vector3.xAxis * 60
-wHeld = true
 currentTime += 2
 local predictiveAimClicks = aimClicks
 renderCallback(1 / 60)
@@ -1872,9 +1774,8 @@ local backstabAimClicks = aimClicks
 local backstabRotations = rotationCalls
 renderCallback()
 assert(
-    rotationCalls == backstabRotations + 1
-        and fighterModule.LocalFighter:GetMoveVector() == Vector3.zero,
-    "Knife Movement must stop at a lethal rear position and aim the camera for the backstab"
+    rotationCalls == backstabRotations + 1,
+    "Knife Camera Aim must lock only from a lethal rear position"
 )
 assert(
     clicks == backstabClicks and aimClicks == backstabAimClicks + 1,
@@ -1901,7 +1802,6 @@ assert(
 
 localItem.Name = "Burst Rifle"
 localItem.Info = { DisplayName = "Burst Rifle" }
-settings.knifeMovement = false
 settings.bhop = true
 wHeld = false
 movementDirection = Vector3.xAxis
@@ -1995,6 +1895,6 @@ assert(
     restoredHooks[fighterModule.LocalFighter.GetCameraData] == true,
     "Stopping the adapter must restore the natural camera-data function"
 )
-assert(table.find(Rivals.capabilities, "knifeMovement") ~= nil)
+assert(table.find(Rivals.capabilities, "knifeMovement") == nil)
 assert(table.find(Rivals.capabilities, "bhop") ~= nil)
 print("rivals-adapter-contracts-ok")

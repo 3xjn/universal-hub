@@ -10,7 +10,6 @@ local Rivals = {
         "shotAim",
         "triggerBot",
         "humanAim",
-        "knifeMovement",
         "bhop",
         "aimSmoothness",
         "headshotRate",
@@ -26,7 +25,6 @@ local Rivals = {
     },
     optionLabels = {
         humanAim = "Human Aim",
-        knifeMovement = "Knife Movement",
         silentAim = "Camera Aim",
         shotAim = "Silent Aim",
     },
@@ -56,7 +54,6 @@ local SLINGSHOT_TARGET_RADIUS = 2.5
 local AUTOMATIC_SHOOT_COOLDOWN = 0.15
 local THROWABLE_MAX_DISTANCE = 2000
 local THROWABLE_REFRESH_INTERVAL = 0.2
-local KNIFE_MOVEMENT_ACQUISITION_DISTANCE = 128
 local THROWABLE_TAGS = { "Grenade", "Throwable", "Projectile" }
 local THROWABLE_CONTAINERS = { "Projectiles", "Throwables", "Debris", "Effects" }
 local THROWABLE_ATTRIBUTES = {
@@ -1220,8 +1217,8 @@ function Rivals.new(context)
     local aimPlan
     local humanAimCharacter
     local humanAimState
-    local backstabMovement
     local bhopMovement
+    local syntheticMovementInputs = {}
     local renderDelta = 1 / 60
     local observations = {}
     local throwableCandidates = {}
@@ -1374,62 +1371,39 @@ function Rivals.new(context)
     end
 
     local function toggleMovementInput(input, enabled)
-        ControlsController:ToggleInput(input, enabled == true)
+        local owned = syntheticMovementInputs[input]
+        if enabled == true then
+            if not owned then
+                local previous = false
+                if type(ControlsController.IsToggled) == "function" then
+                    previous = ControlsController:IsToggled(input) == true
+                elseif type(ControlsController._toggled_inputs) == "table" then
+                    previous = ControlsController._toggled_inputs[input] == true
+                end
+                owned = {
+                    previous = previous,
+                }
+                syntheticMovementInputs[input] = owned
+            end
+            ControlsController:ToggleInput(input, true)
+        elseif owned then
+            ControlsController:ToggleInput(input, owned.previous)
+            syntheticMovementInputs[input] = nil
+        end
     end
 
-    local function clearBackstabInputs()
-        toggleMovementInput(Enum.KeyCode.S, false)
-        toggleMovementInput(Enum.KeyCode.LeftShift, false)
-        toggleMovementInput(Enum.KeyCode.C, false)
-        toggleMovementInput(Enum.KeyCode.Space, false)
-        if MechanicsController.IsSliding
+    local function clearMovementInputs(movement)
+        for input, owned in pairs(syntheticMovementInputs) do
+            ControlsController:ToggleInput(input, owned.previous)
+            syntheticMovementInputs[input] = nil
+        end
+        if movement
+            and movement.ownsSlide
+            and MechanicsController.IsSliding
             and type(MechanicsController.StopSliding) == "function"
         then
             MechanicsController:StopSliding()
         end
-    end
-
-    local function releaseBackstabMovement()
-        if backstabMovement then
-            clearBackstabInputs()
-            if backstabMovement.fighter then
-                pcall(rawset, backstabMovement.fighter, "GetMoveVector", backstabMovement.originalRawMoveVector)
-            end
-            backstabMovement = nil
-        end
-    end
-
-    local function ensureBackstabMovement(fighter)
-        if backstabMovement and backstabMovement.fighter ~= fighter then
-            releaseBackstabMovement()
-        end
-        if backstabMovement then
-            return true
-        end
-        if type(fighter) ~= "table" or type(fighter.GetMoveVector) ~= "function" then
-            return false
-        end
-
-        local originalMoveVector = fighter.GetMoveVector
-        local movement = {
-            direction = nil,
-            fighter = fighter,
-            originalMoveVector = originalMoveVector,
-            originalRawMoveVector = rawget(fighter, "GetMoveVector"),
-            phase = "waitingSlide",
-            slideFrames = 0,
-        }
-        local installed = pcall(rawset, fighter, "GetMoveVector", function(self, ...)
-            if backstabMovement == movement and movement.direction then
-                return movement.direction
-            end
-            return originalMoveVector(self, ...)
-        end)
-        if not installed then
-            return false
-        end
-        backstabMovement = movement
-        return true
     end
 
     local function advanceSlideJump(fighter, movement)
@@ -1464,6 +1438,7 @@ function Rivals.new(context)
                 movement.slideFrames += 1
                 if movement.slideFrames >= 2 then
                     toggleMovementInput(Enum.KeyCode.Space, true)
+                    movement.ownsSlide = false
                     MechanicsController:HighJump()
                     movement.phase = "jump"
                 end
@@ -1477,6 +1452,7 @@ function Rivals.new(context)
                 toggleMovementInput(Enum.KeyCode.C, true)
                 movement.phase = "sliding"
                 movement.slideFrames = 0
+                movement.ownsSlide = true
                 spawn(function()
                     MechanicsController:Slide()
                 end)
@@ -1486,7 +1462,7 @@ function Rivals.new(context)
 
     local function releaseBhopMovement()
         if bhopMovement then
-            clearBackstabInputs()
+            clearMovementInputs(bhopMovement)
             bhopMovement = nil
         end
     end
@@ -1824,9 +1800,6 @@ function Rivals.new(context)
         local weaponName = Rivals.itemName(item)
         local energyRifle = weaponName == "Energy Rifle"
         local knife = weaponName == "Knife"
-        if knife and settings.knifeMovement then
-            return nil
-        end
         local slingshot = weaponName == "Slingshot"
         local splashProjectile = Rivals.isSplashProjectile(item)
         local entity = fighter and fighter.Entity
@@ -2079,91 +2052,7 @@ function Rivals.new(context)
         end)
     end
 
-    local function runBackstabMovement()
-        local settings = store:Get().settings
-        local fighter = FighterController.LocalFighter
-        local root = fighter and fighter.Entity and fighter.Entity.RootPart
-        local item = fighter and fighter.EquippedItem
-        local forwardHeld = UserInputService:IsKeyDown(Enum.KeyCode.W)
-        if not settings.knifeMovement
-            or not forwardHeld
-            or context.isInputCaptured()
-            or not localFighterIsActive()
-            or not localFighterIsInCombat()
-            or Rivals.itemName(item) ~= "Knife"
-            or not root
-        then
-            releaseBackstabMovement()
-            return nil
-        end
-
-        local target = selectBackstabTarget(
-            root.Position,
-            item.Info,
-            KNIFE_MOVEMENT_ACQUISITION_DISTANCE
-        )
-        local plan = target and target.backstabPlan
-        local approachPosition = plan and plan.approachPosition
-        if not target or not approachPosition then
-            releaseBackstabMovement()
-            return nil
-        end
-
-        if not ensureBackstabMovement(fighter) then
-            return nil
-        end
-
-        if backstabMovement.target ~= target.character then
-            backstabMovement.phase = "waitingSlide"
-            backstabMovement.slideFrames = 0
-            backstabMovement.target = target.character
-        end
-
-        local travel = ((plan.movePosition or approachPosition) - root.Position)
-            * Vector3.new(1, 0, 1)
-        if plan.ready or travel.Magnitude <= 1e-3 then
-            backstabMovement.direction = Vector3.zero
-        else
-            backstabMovement.direction = travel.Unit
-        end
-        local camera = Workspace.CurrentCamera
-        local cameraFrame = camera
-            and (camera.GetRenderCFrame and camera:GetRenderCFrame() or camera.CFrame)
-        local cameraOrigin = cameraFrame and cameraFrame.Position
-        local cameraTarget = plan.ready
-            and (target.position or plan.aimPosition)
-            or (cameraOrigin and travel.Magnitude > 1e-3 and cameraOrigin - travel.Unit)
-        local aimSettled = cameraOrigin
-            and cameraTarget
-            and setAimRotation(
-                Rivals.rotationToward(cameraOrigin, cameraTarget),
-                true,
-                target.character
-            )
-            or false
-
-        if plan.ready then
-            clearBackstabInputs()
-            backstabMovement.phase = "ready"
-        else
-            advanceSlideJump(fighter, backstabMovement)
-        end
-
-        local aligned = table.clone(target)
-        aligned.position = plan.aimPosition
-        aligned.aimSettled = aimSettled
-        aligned.backstab = plan.ready
-        aligned.knifePath = plan.path
-        aligned.visible = true
-        return aligned
-    end
-
-    local function runBhop(knifeMovementActive)
-        if knifeMovementActive then
-            bhopMovement = nil
-            return
-        end
-
+    local function runBhop()
         local settings = store:Get().settings
         local fighter = FighterController.LocalFighter
         local direction = movementDirection and movementDirection()
@@ -2392,11 +2281,11 @@ function Rivals.new(context)
             status = statusText(#observations, visibleCount),
         })
         context.render(observations, UserInputService:GetMouseLocation(), utilityObservations)
-        local alignedTarget = runBackstabMovement() or alignCamera()
+        local alignedTarget = alignCamera()
         if not alignedTarget and settings.shotAim then
             alignedTarget = alignCamera(true)
         end
-        runBhop(backstabMovement ~= nil)
+        runBhop()
         local trajectory = alignedTarget
             and ((alignedTarget.ricochet and alignedTarget.ricochet.path)
                 or (alignedTarget.slingshot and alignedTarget.slingshot.path)
@@ -2415,7 +2304,6 @@ function Rivals.new(context)
             triggerHeld = false
         end
         releaseFire()
-        releaseBackstabMovement()
         releaseBhopMovement()
         Rivals.updateVisualSuppressions({}, {}, suppressedVisuals)
         if trajectorySurface then

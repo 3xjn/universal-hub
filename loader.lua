@@ -1,7 +1,7 @@
 local environment = assert(getgenv, "<UH> ~ Your executor is not supported")()
 local configuration = environment.UniversalHubConfig or {}
-local sourceRoot = configuration.SourceBaseUrl
-    or "https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/"
+local officialSourceRoot = "https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/"
+local sourceRoot = configuration.SourceBaseUrl or officialSourceRoot
 local localRoot = configuration.LocalRoot
 local localLoaderPath = type(localRoot) == "string" and localRoot .. "/local.lua" or nil
 local localLoaderSource
@@ -29,6 +29,10 @@ local function queueNextPlace()
 
     if localLoaderSource then
         queue(([[loadstring(readfile(%q), "universal-hub/local.lua")()]]):format(localLoaderPath))
+        return
+    end
+
+    if sourceRoot ~= officialSourceRoot then
         return
     end
 

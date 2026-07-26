@@ -91,4 +91,22 @@ assert(
     "A local version entered through loader.lua must queue the local version for the next place"
 )
 
+environment.UniversalHubConfig = {
+    SourceBaseUrl = "https://example.invalid/custom/",
+}
+readfile = nil
+requestedUrl = nil
+queuedTeleportSource = nil
+local customChunk, customCompileError = loadstring(source, "loader.lua")
+local customResult = assert(customChunk, customCompileError)()
+assert(customResult == "remote-loader-ok")
+assert(
+    requestedUrl == "https://example.invalid/custom/hub.lua",
+    "An explicit custom source may be used for the current session"
+)
+assert(
+    queuedTeleportSource == nil,
+    "A custom remote source must not become persistent cross-teleport code execution"
+)
+
 print("remote-loader-contracts-ok")

@@ -17,7 +17,6 @@ local OPTION_GROUPS = {
         label = "MELEE",
         rows = {
             { "knifeAura", "microStep" },
-            { "knifeMovement" },
         },
     },
     {
@@ -54,7 +53,6 @@ local OPTION_LABELS = {
     noSmoke = "No Smoke",
     noWeaponSlow = "No Weapon Slow",
     knifeAura = "Knife Aura",
-    knifeMovement = "Knife Movement",
     microStep = "Micro Step",
     spinBot = "Spin Bot",
     wallbang = "Wallbang",

@@ -77,7 +77,6 @@ local defaultSettings = {
     health = true,
     humanAim = false,
     knifeAura = false,
-    knifeMovement = false,
     maximumFov = 500,
     microStep = false,
     minimumFov = 40,
