@@ -6,12 +6,15 @@ The menu inherits Hydroxide's generated-code and tooling identity while remainin
 
 - Panel: `Color3.fromRGB(17, 23, 29)` at 97% opacity
 - Elevated controls: `Color3.fromRGB(21, 28, 35)`
+- Hovered controls: `Color3.fromRGB(28, 37, 45)`
 - Border: `Color3.fromRGB(41, 50, 58)`
 - Primary text: `Color3.fromRGB(243, 246, 247)`
 - Secondary text: `Color3.fromRGB(167, 176, 184)`
 - Active/visible: `Color3.fromRGB(98, 214, 173)`
+- Toggle active fill: `Color3.fromRGB(74, 166, 139)` across the whole pill
 - Blocked/error: `Color3.fromRGB(230, 107, 110)`
 - Typeface: Drawing Plex
+- Depth is built from Drawing primitives: a low-opacity offset shadow, one-pixel frame, elevated title surface, and a 3 px semantic accent rail. Roblox GUI effects and rounded-corner assumptions are not part of the shared shell.
 
 ## Layout contract
 
@@ -26,6 +29,7 @@ The menu inherits Hydroxide's generated-code and tooling identity while remainin
 - Configured child controls show `Standby` while their parent is disabled instead of pretending to be active
 - Compact `RSHIFT` control in the title row hides the menu; the same key restores it
 - Pointer capture prevents menu interaction from firing the weapon
+- Interactive Drawing controls implement their own hover/resting state. State changes update the resting color so leaving a control never paints stale state back over it.
 - FOV follows the pointer
 - `COSMETICS` is a full-width collapsed disclosure at the bottom of the panel. Opening it reveals an explicit two-option `Weapons` / `Gloves` segmented selector, a separate previous/current/next weapon row in Weapons mode, skin picker, schema-constrained wear slider, conditional StatTrak toggle, and contextual reset. The selected weapon is independent of the equipped weapon so an override can be prepared before that weapon is equipped. In Gloves mode, the weapon row collapses, the StatTrak slot becomes a `Solid Color` control, and enabling it reveals three direct RGB sliders that color only the local viewmodel's glove parts.
 - The selected cosmetics segment uses the accent surface while the inactive segment stays elevated. Both labels remain visible at all times; the active segment may show the selected weapon or glove family so mode switching is never hidden behind unrelated copy.
@@ -37,6 +41,16 @@ The menu inherits Hydroxide's generated-code and tooling identity while remainin
 - World utility observations reuse the existing palette and overlay surface. Moving throwables receive a compact marker and label; replicated fire and smoke voxels are projected into one immediate Drawing triangle mesh per paint pass, avoiding a retained object per tile while preserving the exact server-authored affected area rather than estimating a radius. Executors without immediate paint support fall back to retained translucent quads.
 - A planted-bomb marker is a small distance-scaled `BillboardGui` anchored above the replicated bomb. Its dark panel uses the standard border, a 3 px semantic accent rail, a secondary `BOMB` eyebrow, and a separate high-contrast countdown; the final ten seconds turn only the rail, border, and countdown red. It uses the server-time plant payload, stays hidden beyond its configured range, becomes through-wall readable only at useful nearby distances, and is lifecycle-owned by the overlay so it cannot survive a reload or round cleanup.
 - The legacy projected-bounds rectangle is only a compatibility fallback when an adapter cannot publish body-part observations
+
+## Shared Drawing primitives
+
+- `Panel`: shadow, opaque body, one-pixel frame, elevated title surface, and accent rail; the full stack moves and resizes as one draggable window.
+- `Status cue`: title-row status copy plus a semantic live/error dot.
+- `Value surface`: compact elevated backing for right-aligned live values such as the equipped weapon.
+- `Toggle card`: framed two-column control with label, disabled treatment, and hover feedback. The card surface remains neutral in every state. State is carried by a 40 × 22 px switch with one muted fill across the whole pill, a dark offset shadow, and an inset rimmed thumb. Normal states do not repeat `On` or `Off`; exceptional `Standby` and `N/A` states may use text.
+- `Slider`: transparent 28 px hit target over a 4 px track, semantic fill, and high-contrast circular thumb. Rate-slider thumb travel is inset by its radius so the zero and 100 percent states stay inside the track; each live percentage sits in an aligned one-pixel framed value surface.
+- `Section divider`: compact accent eyebrow and one-pixel continuation rule.
+- These primitives are shared by every game adapter. Adapters choose capabilities and labels; they do not fork presentation.
 
 ## State contract
 

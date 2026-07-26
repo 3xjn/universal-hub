@@ -2,7 +2,11 @@ local fs = require("@lune/fs")
 local source = fs.readFile("local.lua")
 local exited = false
 local loaded = {}
+local queuedTeleportSource
 local environment = {
+    queue_on_teleport = function(source)
+        queuedTeleportSource = source
+    end,
     UniversalHubConfig = {
         Import = function()
             error("stale remote import must not run")
@@ -55,4 +59,9 @@ local result = assert(chunk, compileError)()
 assert(result == "local-loader-ok")
 assert(exited == true, "Refreshing Hydroxide must let its initializer clean up the previous session")
 assert(loaded[1] == "hydroxide/local/init.lua" and loaded[2] == "universal-hub/local/init.lua")
+assert(
+    type(queuedTeleportSource) == "string"
+        and string.find(queuedTeleportSource, "universal%-hub/local/local%.lua") ~= nil,
+    "Local loader must queue itself so game-to-game teleports refresh the selected adapter"
+)
 print("local-loader-contracts-ok")

@@ -23,6 +23,14 @@ function surface:create(kind, properties)
         callbacks = {},
         Kind = kind,
     }
+    setmetatable(node, {
+        __newindex = function(target, key, value)
+            if key == "_restingColor" then
+                error("Drawing node proxies must not receive private UI state")
+            end
+            rawset(target, key, value)
+        end,
+    })
     for key, value in pairs(properties) do
         node[key] = value
     end
@@ -37,10 +45,16 @@ function surface:destroy()
     destroyed = true
 end
 
+local chamPaintCallback
 local utilityPaintCallback
 function surface:paint(zIndex, callback)
-    assert(zIndex == 68, "Utility zone mesh must stay behind its marker and label")
-    utilityPaintCallback = callback
+    if zIndex == 10 then
+        chamPaintCallback = callback
+    elseif zIndex == 20 then
+        utilityPaintCallback = callback
+    else
+        error("Immediate overlay paint must stay within its assigned layer")
+    end
     return {
         Disconnect = function() end,
     }
@@ -234,10 +248,22 @@ local overlay = Overlay.new({
 
 assert(captures[1] == true, "A visible Drawing menu must immediately release and own the cursor")
 assert(overlay.controls.title.Text == "Universal Hub · Test Game")
+assert(
+    overlay.controls.panelShadow.Position == overlay.controls.panel.Position + Vector2.new(5, 6)
+        and overlay.controls.panelBorder.Position == overlay.controls.panel.Position
+        and overlay.controls.weaponSurface.Size == Vector2.new(276, 32)
+        and overlay.controls.fovCard.Size == Vector2.new(276, 54),
+    "The shared Drawing shell must compose its own depth, frame, and full-width summary cards"
+)
+assert(
+    overlay.controls.weaponSurface.Position.X < overlay.controls.weaponValue.Position.X
+        and overlay.controls.fovAmount.Text == "180 px",
+    "Weapon and FOV values must use the approved summary-card hierarchy"
+)
 assert(overlay.controls.options.silentAim.label.Text == "Camera Aim")
 overlay.controls.options.silentAim.row.callbacks.click()
 assert(optionChanges[1].name == "silentAim" and optionChanges[1].value == true)
-assert(overlay.controls.sections.rage.label.Text == "RAGE")
+assert(overlay.controls.sections.rage.label.Text == "AIM")
 assert(overlay.controls.sections.melee.label.Text == "MELEE")
 assert(overlay.controls.sections.movement.label.Text == "MOVEMENT")
 assert(overlay.controls.sections.visuals.label.Text == "VISUALS")
@@ -247,6 +273,13 @@ assert(overlay.controls.options.microStep.label.Text == "Micro Step")
 assert(overlay.controls.options.microStep.marker ~= nil)
 assert(overlay.controls.options.noFlash.label.Text == "No Flash")
 assert(overlay.controls.options.noSmoke.label.Text == "No Smoke")
+assert(
+    overlay.controls.options.noFlash.switch.track.Size == Vector2.new(18, 22)
+        and overlay.controls.options.noFlash.switch.left.Radius == 11
+        and overlay.controls.options.noFlash.switch.knob.Radius == 8.5
+        and overlay.controls.options.noFlash.switch.knobRim ~= nil,
+    "Visual toggles must use the layered 40 by 22 switch primitive"
+)
 assert(overlay.controls.options.noWeaponSlow.label.Text == "No Weapon Slow")
 assert(overlay.controls.options.rapidFire.label.Text == "Rapid Fire")
 assert(overlay.controls.options.boxes.label.Text == "Hitboxes")
@@ -257,6 +290,25 @@ assert(overlay.controls.rates.missRate.label.Text == "Miss Rate")
 assert(overlay.controls.rates.headshotRate.value.Text == "50%")
 assert(overlay.controls.rates.missRate.value.Text == "10%")
 assert(overlay.controls.rates.aimSmoothness.value.Text == "35%")
+local aimRateControl = overlay.controls.rates.aimSmoothness
+assert(
+    aimRateControl.valueBorder ~= nil
+        and aimRateControl.valueBorder.Position == aimRateControl.valueSurface.Position
+        and aimRateControl.valueBorder.Size == aimRateControl.valueSurface.Size,
+    "Rate values must use one aligned framed surface instead of an unbounded number label"
+)
+store:Patch({ settings = { aimSmoothness = 0 } })
+assert(
+    aimRateControl.knob.Position.X - aimRateControl.knob.Radius >= aimRateControl.track.Position.X,
+    "A zero-percent rate thumb must stay inside the visual track instead of colliding with the label"
+)
+store:Patch({ settings = { aimSmoothness = 100 } })
+assert(
+    aimRateControl.knob.Position.X + aimRateControl.knob.Radius
+        <= aimRateControl.track.Position.X + aimRateControl.track.Size.X,
+    "A full-rate thumb must stay inside the visual track instead of crowding the value surface"
+)
+store:Patch({ settings = { aimSmoothness = 35 } })
 local bombAdornee = {}
 instanceThreadRestricted = true
 local bombPatchSucceeded, bombPatchError = pcall(function()
@@ -294,10 +346,10 @@ assert(
         > overlay.controls.options.noSmoke.row.Position.Y + overlay.controls.options.noSmoke.row.Size.Y,
     "Collapsed cosmetics must contain every available option"
 )
-assert(overlay.controls.fovLabel.Text == "FOV · 180 px")
+assert(overlay.controls.fovLabel.Text == "FOV" and overlay.controls.fovAmount.Text == "180 px")
 assert(
-    overlay.controls.fovValue.Text == "Fullscreen Off",
-    "Fullscreen aim must be an explicit control instead of a hidden numeric-value gesture"
+    overlay.controls.fovValue.Text == "Fullscreen",
+    "Fullscreen aim must remain an explicit card control"
 )
 overlay.controls.fovModeButton.callbacks.click()
 assert(optionChanges[2].name == "fullScreenAim" and optionChanges[2].value == true)
@@ -306,7 +358,10 @@ store:Patch({
         fullScreenAim = true,
     },
 })
-assert(overlay.controls.fovValue.Text == "Fullscreen On")
+assert(
+    overlay.controls.fovValue.Text == "Fullscreen"
+        and overlay.controls.fovModeButton.Color == Color3.fromRGB(23, 53, 45)
+)
 assert(overlay.controls.fovCircle.Visible == false, "Fullscreen aim must hide the radius circle")
 store:Patch({
     settings = {
@@ -322,7 +377,34 @@ store:Patch({
         silentAim = true,
     },
 })
-assert(overlay.controls.options.wallbang.value.Text == "On")
+assert(
+    overlay.controls.options.wallbang.value.Text == ""
+        and overlay.controls.options.wallbang.value.Visible == false,
+    "Available toggles must communicate state through the switch without redundant On/Off text"
+)
+local silentAimControl = overlay.controls.options.silentAim
+assert(
+    silentAimControl.row.Color == Color3.fromRGB(21, 28, 35)
+        and silentAimControl.switch.track.Color == Color3.fromRGB(74, 166, 139)
+        and silentAimControl.switch.fillTrack.Color == Color3.fromRGB(74, 166, 139),
+    "Enabled toggles must use one muted pill color on a neutral card"
+)
+silentAimControl.row.callbacks.pointerenter(silentAimControl.row)
+assert(
+    silentAimControl.row.Color == Color3.fromRGB(28, 37, 45),
+    "Interactive Drawing controls must provide hover feedback without Roblox GUI widgets"
+)
+silentAimControl.row.callbacks.pointerleave(silentAimControl.row)
+assert(
+    silentAimControl.row.Color == Color3.fromRGB(21, 28, 35),
+    "Leaving a hovered toggle must restore its latest reactive state"
+)
+store:Patch({ error = true })
+assert(
+    overlay.controls.status.Color == Color3.fromRGB(230, 107, 110),
+    "The shared status copy must surface adapter errors semantically"
+)
+store:Patch({ error = false })
 overlay.controls.hideButton.callbacks.click()
 assert(menuVisibilityChanges[1] == false, "Hide control must request a hidden menu")
 
@@ -338,11 +420,11 @@ overlay.controls.sliderHit.callbacks.pointerdown(nil, Vector2.new(1280, 0))
 assert(fovChanges[1] == 500, "FOV pointer input must clamp through the slider")
 overlay.controls.rates.headshotRate.hit.callbacks.pointerdown(
     nil,
-    Vector2.new(overlay.controls.rates.headshotRate.hit.Position.X + 207, 0)
+    Vector2.new(overlay.controls.rates.headshotRate.hit.Position.X + 84, 0)
 )
 overlay.controls.rates.missRate.hit.callbacks.drag(
     nil,
-    Vector2.new(overlay.controls.rates.missRate.hit.Position.X + 69, 0)
+    Vector2.new(overlay.controls.rates.missRate.hit.Position.X + 28, 0)
 )
 assert(
     rateChanges[1].name == "headshotRate"
@@ -358,7 +440,9 @@ overlay.controls.panel.callbacks.drag(nil, Vector2.new(510, 40))
 assert(
     overlay.controls.panel.Position ~= panelStart
         and overlay.controls.title.Position
-            == overlay.controls.panel.Position + Vector2.new(12, 12),
+            == overlay.controls.panel.Position + Vector2.new(16, 12)
+        and overlay.controls.panelShadow.Position
+            == overlay.controls.panel.Position + Vector2.new(5, 6),
     "Dragging the panel must move the complete Hub window as one unit within the viewport"
 )
 
@@ -495,39 +579,60 @@ overlay:render({
 }, Vector2.new(640, 360))
 local playerNodes = overlay.playerNodes[player]
 assert(playerNodes.box.Visible == true, "Hitboxes must draw one square around the whole character")
+assert(
+    playerNodes.box.ZIndex < overlay.controls.panel.ZIndex
+        and playerNodes.healthTip.ZIndex < overlay.controls.panel.ZIndex,
+    "Targets created while the menu is open must remain below every retained menu surface"
+)
 assert(playerNodes.box.Position == Vector2.new(100, 100))
 assert(playerNodes.box.Size == Vector2.new(50, 100))
 assert(#playerNodes.bodyParts == 2)
 assert(playerNodes.bodyParts[1].outline == nil, "Hitboxes must not create boxes around individual body parts")
-assert(#playerNodes.bodyParts[1].faces == 6)
-assert(playerNodes.bodyParts[1].faces[1].Visible == true)
-assert(playerNodes.bodyParts[1].faces[1].Filled == true)
-assert(playerNodes.bodyParts[1].faces[1].Transparency == 0.18)
-assert(playerNodes.bodyParts[1].faces[1].PointA == Vector2.new(116, 100))
-assert(playerNodes.bodyParts[1].faces[1].PointB == Vector2.new(132, 101))
-assert(playerNodes.bodyParts[1].faces[1].PointC == Vector2.new(132, 117))
-assert(playerNodes.bodyParts[1].faces[1].PointD == Vector2.new(116, 118))
-assert(playerNodes.bodyParts[1].faces[2].PointA == Vector2.new(119, 103))
-assert(playerNodes.bodyParts[1].faces[2].PointB == Vector2.new(119, 121))
-assert(playerNodes.bodyParts[1].faces[2].PointC == Vector2.new(135, 120))
-assert(playerNodes.bodyParts[1].faces[2].PointD == Vector2.new(135, 104))
-assert(playerNodes.bodyParts[1].faces[1].Color == Color3.fromRGB(98, 214, 173))
-assert(#playerNodes.bodyParts[2].faces == 6)
-assert(playerNodes.bodyParts[2].faces[1].Visible == true)
-assert(playerNodes.bodyParts[2].faces[1].PointA == Vector2.new(110, 120))
-assert(playerNodes.bodyParts[2].faces[1].PointB == Vector2.new(136, 121))
-assert(playerNodes.bodyParts[2].faces[1].PointC == Vector2.new(136, 158))
-assert(playerNodes.bodyParts[2].faces[1].PointD == Vector2.new(110, 160))
-assert(playerNodes.bodyParts[2].faces[1].Color == Color3.fromRGB(230, 107, 110))
+assert(#playerNodes.bodyParts[1].faces == 0 and #playerNodes.bodyParts[2].faces == 0)
+local chamQuads = {}
+local chamRenderer = {
+    FilledQuad = function(pointA, pointB, pointC, pointD, color, opacity)
+        table.insert(chamQuads, {
+            color = color,
+            opacity = opacity,
+            points = { pointA, pointB, pointC, pointD },
+        })
+    end,
+}
+chamPaintCallback(chamRenderer)
+assert(#chamQuads == 12, "Two six-face body cubes must paint as 12 immediate filled quads")
+assert(chamQuads[1].points[1] == Vector2.new(116, 100))
+assert(chamQuads[1].points[2] == Vector2.new(132, 101))
+assert(chamQuads[1].points[3] == Vector2.new(132, 117))
+assert(chamQuads[1].points[4] == Vector2.new(116, 118))
+assert(chamQuads[2].points[1] == Vector2.new(119, 103))
+assert(chamQuads[2].points[2] == Vector2.new(119, 121))
+assert(chamQuads[2].points[3] == Vector2.new(135, 120))
+assert(chamQuads[2].points[4] == Vector2.new(135, 104))
+assert(chamQuads[1].color == Color3.fromRGB(98, 214, 173))
+assert(chamQuads[1].opacity == 0.18)
+assert(chamQuads[7].color == Color3.fromRGB(230, 107, 110))
+
+local quadCount = 0
+for _, node in ipairs(nodes) do
+    if node.Kind == "Quad" then
+        quadCount += 1
+    end
+end
+assert(quadCount == 0, "Immediate chams must not allocate one retained Quad per body-part face")
 
 store:Patch({ settings = { boxes = false } })
 overlay:render(overlay.observations, Vector2.new(640, 360))
 assert(playerNodes.box.Visible == false, "Disabling Hitboxes must hide the character square")
-assert(playerNodes.bodyParts[1].faces[1].Visible == true, "Disabling Hitboxes must preserve Chams")
+table.clear(chamQuads)
+chamPaintCallback(chamRenderer)
+assert(#chamQuads == 12, "Disabling Hitboxes must preserve Chams")
 store:Patch({ settings = { boxes = true, chams = false } })
 overlay:render(overlay.observations, Vector2.new(640, 360))
 assert(playerNodes.box.Visible == true, "Hitboxes must remain independently available")
-assert(playerNodes.bodyParts[1].faces[1].Visible == false, "Chams must control only filled cuboid faces")
+table.clear(chamQuads)
+chamPaintCallback(chamRenderer)
+assert(#chamQuads == 0, "Chams must control only filled cuboid faces")
 overlay.optionSupport.chams = false
 overlay:_renderState(store:Get())
 assert(overlay.controls.options.chams.value.Text == "N/A")
@@ -540,14 +645,71 @@ overlay:render(overlay.observations, Vector2.new(640, 360))
 
 assert(playerNodes.name.Text == "Opponent" and playerNodes.name.Visible == true)
 assert(playerNodes.healthTrack.Visible == true and playerNodes.healthFill.Visible == true)
-assert(playerNodes.healthTrack.Position == Vector2.new(93, 100))
-assert(playerNodes.healthTrack.Size == Vector2.new(4, 100))
-assert(playerNodes.healthFill.Position.X == 94)
+assert(playerNodes.healthTrack.Position == Vector2.new(90, 100))
+assert(playerNodes.healthTrack.Size == Vector2.new(6, 100))
+assert(playerNodes.healthFill.Position.X == 91)
 assert(math.abs(playerNodes.healthFill.Position.Y - 128.44) < 1e-4)
-assert(playerNodes.healthFill.Size.X == 2)
+assert(playerNodes.healthFill.Size.X == 4)
 assert(math.abs(playerNodes.healthFill.Size.Y - 70.56) < 1e-4)
+assert(
+    playerNodes.healthValue.Text == "72 HP"
+        and playerNodes.healthValue.Size == 14
+        and playerNodes.healthValue.Visible == true
+)
+assert(playerNodes.healthValue.Center == false)
+assert(playerNodes.healthValue.Position == Vector2.new(100, 203))
+assert(playerNodes.healthValue.Color == playerNodes.healthFill.Color)
+assert(playerNodes.healthTip.Visible == true and playerNodes.healthTip.Color == Color3.fromRGB(243, 246, 247))
+assert(math.abs(playerNodes.healthTip.Position.Y - 127.44) < 1e-4)
 assert(playerNodes.weapon.Text == "AK-47")
+assert(playerNodes.weapon.Position.Y == 218)
 local detailedObservations = overlay.observations
+local ffaObservations = {}
+for playerIndex = 1, 9 do
+    local bodyParts = {}
+    for partIndex = 1, 15 do
+        local offset = playerIndex * 100 + partIndex * 4
+        table.insert(bodyParts, {
+            corners = {
+                Vector2.new(offset, 100),
+                Vector2.new(offset + 3, 100),
+                Vector2.new(offset + 3, 103),
+                Vector2.new(offset, 103),
+                Vector2.new(offset + 1, 101),
+                Vector2.new(offset + 4, 101),
+                Vector2.new(offset + 4, 104),
+                Vector2.new(offset + 1, 104),
+            },
+            visible = partIndex % 2 == 0,
+        })
+    end
+    table.insert(ffaObservations, {
+        bodyParts = bodyParts,
+        bounds = {
+            position = Vector2.new(playerIndex * 100, 100),
+            size = Vector2.new(50, 100),
+        },
+        health = 100,
+        maxHealth = 100,
+        player = { Name = "FFA " .. playerIndex },
+        visible = true,
+    })
+end
+overlay:render(ffaObservations, Vector2.new(640, 360))
+table.clear(chamQuads)
+chamPaintCallback(chamRenderer)
+assert(
+    #chamQuads == 9 * 15 * 6,
+    "Nine R15 players must retain full cube chams through one immediate paint batch"
+)
+quadCount = 0
+for _, node in ipairs(nodes) do
+    if node.Kind == "Quad" then
+        quadCount += 1
+    end
+end
+assert(quadCount == 0, "FFA-scale chams must not add retained Drawing objects")
+
 overlay:render({
     {
         bounds = {
@@ -636,7 +798,9 @@ assert(captures[2] == false, "Hiding the Drawing menu must restore gameplay inpu
 assert(overlay.controls.panel.Visible == false)
 assert(overlay.controls.options.silentAim.row.Visible == false)
 assert(playerNodes.box.Visible == true)
-assert(playerNodes.bodyParts[1].faces[1].Visible == true, "Hiding the menu must not hide enabled player overlays")
+table.clear(chamQuads)
+chamPaintCallback(chamRenderer)
+assert(#chamQuads == 12, "Hiding the menu must not hide enabled player overlays")
 assert(overlay.controls.fovCircle.Visible == true, "Hiding the menu must not hide the enabled FOV circle")
 
 overlay:destroy()
@@ -682,6 +846,12 @@ local rivalsOverlay = Overlay.new({
 })
 assert(rivalsOverlay.controls.options.silentAim.label.Text == "Camera Aim")
 assert(rivalsOverlay.controls.options.humanAim.label.Text == "Human Aim")
+assert(
+    rivalsOverlay.controls.panelShadow ~= nil
+        and rivalsOverlay.controls.panelBorder ~= nil
+        and rivalsOverlay.controls.options.silentAim.switch.knob ~= nil,
+    "Game adapters must share the same composed Drawing shell and toggle primitives"
+)
 assert(rivalsOverlay.controls.options.triggerBot ~= nil)
 assert(
     rivalsOverlay.controls.rates.aimSmoothness

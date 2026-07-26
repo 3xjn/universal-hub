@@ -321,6 +321,7 @@ function Counterblox.new(context)
     local Bullet = loadModule(ReplicatedStorage.Components.Weapon.Classes.Bullet)
     local Melee = loadModule(ReplicatedStorage.Components.Melee)
     local CameraController = loadModule(ReplicatedStorage.Controllers.CameraController)
+    local SpectateController = loadModule(ReplicatedStorage.Controllers.SpectateController)
     local CrosshairSettings =
         loadModule(ReplicatedStorage.Interface.Screens.Gameplay.Middle.Crosshair.Settings)
     local GetRayIgnore = loadModule(ReplicatedStorage.Components.Common.GetRayIgnore)
@@ -432,14 +433,14 @@ function Counterblox.new(context)
         end
     end
 
-    local function isSpectatedCharacter(character)
-        local camera = Workspace.CurrentCamera
-        local subject = camera and camera.CameraSubject
-        return subject ~= nil
-            and (subject == character or subject.Parent == character or subject:IsDescendantOf(character))
-    end
-
     local function spectatedPlayer()
+        if SpectateController and type(SpectateController.GetPlayer) == "function" then
+            local success, player = pcall(SpectateController.GetPlayer)
+            if success and player then
+                return player
+            end
+        end
+
         local camera = Workspace.CurrentCamera
         local subject = camera and camera.CameraSubject
         if not subject then
@@ -447,6 +448,27 @@ function Counterblox.new(context)
         end
         return Players:GetPlayerFromCharacter(subject)
             or subject.Parent and Players:GetPlayerFromCharacter(subject.Parent)
+    end
+
+    local function isSpectatedCharacter(character)
+        local player = spectatedPlayer()
+        if player and player.Character == character then
+            return true
+        end
+
+        local camera = Workspace.CurrentCamera
+        local subject = camera and camera.CameraSubject
+        return subject ~= nil
+            and (subject == character or subject.Parent == character or subject:IsDescendantOf(character))
+    end
+
+    local function spectatorRaycastIgnore()
+        local player = spectatedPlayer()
+        local character = player and player.Character
+        if character and character ~= LocalPlayer.Character then
+            return { character }
+        end
+        return {}
     end
 
     local function isOpponent(player, character)
@@ -477,6 +499,7 @@ function Counterblox.new(context)
         local options = {
             includeBlocked = includeBlocked == true,
             isEligible = isOpponent,
+            raycastIgnore = spectatorRaycastIgnore(),
             screenOrigin = UserInputService:GetMouseLocation(),
         }
         if not settings.fullScreenAim then
@@ -1232,6 +1255,7 @@ function Counterblox.new(context)
     local function updateObservations()
         observations = targeting.observePlayers({
             isEligible = isOpponent,
+            raycastIgnore = spectatorRaycastIgnore(),
             screenOrigin = UserInputService:GetMouseLocation(),
         })
 

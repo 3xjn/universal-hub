@@ -77,6 +77,7 @@ local defaultSettings = {
     health = true,
     humanAim = false,
     knifeAura = false,
+    knifeMovement = false,
     maximumFov = 500,
     microStep = false,
     minimumFov = 40,
@@ -88,6 +89,7 @@ local defaultSettings = {
     noSpread = false,
     noWeaponSlow = false,
     rapidFire = false,
+    shotAim = false,
     silentAim = false,
     skinOverrides = {},
     spinBot = false,
@@ -223,6 +225,13 @@ overlay = Overlay.new({
     end,
     setOption = function(name, enabled)
         session:setOption(name, enabled)
+        if enabled and adapterDefinition.exclusiveOptions then
+            for _, excluded in ipairs(
+                adapterDefinition.exclusiveOptions[name] or {}
+            ) do
+                session:setOption(excluded, false)
+            end
+        end
     end,
     setRate = function(name, value)
         session:setRate(name, value)
@@ -264,6 +273,9 @@ local created, result = pcall(adapterDefinition.new, {
     gcObjects = function()
         return getgc(true)
     end,
+    getLoadedModules = type(environment.getloadedmodules) == "function"
+            and environment.getloadedmodules
+        or nil,
     hookFunction = hookfunction,
     isInputCaptured = function()
         return inputCapture:IsEnabled()

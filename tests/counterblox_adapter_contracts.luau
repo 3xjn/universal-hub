@@ -506,6 +506,13 @@ local gameRaycast = {
         return gameRaycastHits
     end,
 }
+local spectatedCharacter
+local spectatedPlayer
+local spectateController = {
+    GetPlayer = function()
+        return spectatedPlayer
+    end,
+}
 local replicatedStorage = {
     Assets = {
         Weapons = {
@@ -527,6 +534,7 @@ local replicatedStorage = {
     Controllers = {
         CameraController = cameraController,
         InventoryController = inventoryController,
+        SpectateController = spectateController,
     },
     Interface = {
         Screens = {
@@ -574,8 +582,6 @@ local localPlayer = {
         return nil
     end,
 }
-local spectatedCharacter
-local spectatedPlayer
 local existingViewmodelDestroyCalls = 0
 local existingLiveComponent = {
     Float = 0,
@@ -732,6 +738,7 @@ local moduleValues = {
     [gameRaycast] = gameRaycast,
     [meleeModule] = meleeModule,
     [skinsModule] = skinsModule,
+    [spectateController] = spectateController,
     [viewmodelModule] = viewmodelModule,
     [weaponModule] = weaponModule,
     [weaponComponentModule] = weaponComponentModule,
@@ -808,7 +815,8 @@ local initialized, adapter = pcall(Counterblox.new, {
                     visible = nearestTargetVisible,
                 }
             end,
-            observePlayers = function()
+            observePlayers = function(options)
+                adapterState.lastObserveOptions = options
                 return observedPlayers or {
                     {
                         character = nearestTargetCharacter,
@@ -904,16 +912,24 @@ assert(
 gameMode = "Competitive"
 spectatedCharacter = {}
 spectatedPlayer = {
+    Character = spectatedCharacter,
     GetAttribute = function(_, name)
         return name == "Team" and "CT" or nil
     end,
 }
 currentCamera.CameraSubject = {
-    Parent = spectatedCharacter,
-    IsDescendantOf = function(_, ancestor)
-        return ancestor == spectatedCharacter
+    Name = "orphaned-spectate-humanoid",
+    Parent = nil,
+    IsDescendantOf = function()
+        return false
     end,
 }
+renderCallback()
+assert(
+    adapterState.lastObserveOptions.raycastIgnore
+        and adapterState.lastObserveOptions.raycastIgnore[1] == spectatedCharacter,
+    "Spectator ESP visibility must ignore the character occupying the followed camera"
+)
 assert(
     adapter.isOpponent(sameTeamPlayer, livingCharacter) == true,
     "Spectator ESP must classify opponents relative to the followed player's team"

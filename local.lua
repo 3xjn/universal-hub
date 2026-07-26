@@ -12,6 +12,18 @@ hydroxideConfiguration.LocalRoot = configuration.HydroxideRoot
 hydroxideConfiguration.Branch = hydroxideConfiguration.Branch or "dev"
 environment.HydroxideConfig = hydroxideConfiguration
 
+local synapse = environment.syn
+local queue = type(environment.queue_on_teleport) == "function"
+        and environment.queue_on_teleport
+    or type(environment.queueonteleport) == "function" and environment.queueonteleport
+    or type(synapse) == "table" and type(synapse.queue_on_teleport) == "function"
+        and synapse.queue_on_teleport
+if queue then
+    queue(([[
+loadstring(readfile(%q), "universal-hub/local.lua")()
+]]):format(configuration.LocalRoot .. "/local.lua"))
+end
+
 local hydroxideChunk, hydroxideError =
     loadstring(readfile(configuration.HydroxideRoot .. "/init.lua"), "hydroxide/init.lua")
 assert(hydroxideChunk, hydroxideError)()
