@@ -776,6 +776,81 @@ assert(
     overlay.utilityNodes[2].zones == nil,
     "Immediate utility meshes must not allocate one retained Drawing object per voxel"
 )
+do
+local tripmineCorners = {
+    Vector2.new(280, 210),
+    Vector2.new(360, 210),
+    Vector2.new(360, 270),
+    Vector2.new(280, 270),
+    Vector2.new(300, 225),
+    Vector2.new(340, 225),
+    Vector2.new(340, 255),
+    Vector2.new(300, 255),
+}
+overlay:render(detailedObservations, Vector2.new(640, 360), {
+    {
+        label = "TRIPMINE",
+        labelPosition = Vector2.new(320, 194),
+        markerStyle = "wireframeCube",
+        onScreen = true,
+        polygons = {},
+        screenPosition = Vector2.new(320, 240),
+        tone = "danger",
+        wireframeCorners = tripmineCorners,
+    },
+})
+local tripmineNodes = overlay.utilityNodes[1]
+assert(
+    tripmineNodes.marker.Visible == false
+        and tripmineNodes.label.Visible
+        and tripmineNodes.label.Text == "TRIPMINE"
+        and tripmineNodes.label.Size == 14
+        and tripmineNodes.label.Position == Vector2.new(320, 194),
+    "Tripmine ESP must replace the tiny square with a readable cube label"
+)
+assert(
+    #tripmineNodes.wireframe == 12
+        and tripmineNodes.wireframe[1].Visible
+        and tripmineNodes.wireframe[1].From == tripmineCorners[1]
+        and tripmineNodes.wireframe[1].To == tripmineCorners[2]
+        and tripmineNodes.wireframe[1].Thickness == 2,
+    "Tripmine ESP must render all twelve projected cuboid edges with a visible stroke"
+)
+overlay:render(detailedObservations, Vector2.new(640, 360), {
+    {
+        label = "TRIPMINE",
+        labelPosition = Vector2.new(18, -12),
+        markerStyle = "wireframeCube",
+        onScreen = true,
+        polygons = {},
+        screenPosition = Vector2.new(18, 8),
+        tone = "danger",
+        wireframeCorners = tripmineCorners,
+    },
+})
+assert(
+    tripmineNodes.label.Position.X >= 36 and tripmineNodes.label.Position.Y >= 11,
+    "A partially visible Tripmine must keep its centered label inside the viewport"
+)
+overlay:render(detailedObservations, Vector2.new(640, 360), {
+    {
+        label = "HE",
+        onScreen = true,
+        polygons = {},
+        screenPosition = Vector2.new(320, 240),
+        tone = "danger",
+    },
+})
+assert(
+    tripmineNodes.marker.Visible
+        and tripmineNodes.label.Size == 12
+        and tripmineNodes.label.Position == Vector2.new(320, 248),
+    "Non-Tripmine utilities must retain the compact marker presentation"
+)
+for _, edge in ipairs(tripmineNodes.wireframe) do
+    assert(edge.Visible == false, "Reused utility nodes must hide stale Tripmine wireframes")
+end
+end
 store:Patch({ settings = { utilityEsp = false } })
 overlay:render(detailedObservations, Vector2.new(640, 360), {
     {

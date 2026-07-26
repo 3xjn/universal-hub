@@ -108,6 +108,20 @@ local BODY_CUBE_FACES = {
     { 1, 4, 8, 5 },
     { 2, 6, 7, 3 },
 }
+local UTILITY_CUBE_EDGES = {
+    { 1, 2 },
+    { 2, 3 },
+    { 3, 4 },
+    { 4, 1 },
+    { 5, 6 },
+    { 6, 7 },
+    { 7, 8 },
+    { 8, 5 },
+    { 1, 5 },
+    { 2, 6 },
+    { 3, 7 },
+    { 4, 8 },
+}
 
 local BODY_CUBE_OPACITY = 0.18
 local CONTENT_WIDTH = 276
@@ -122,6 +136,20 @@ local COSMETIC_WEAPON_CONTROLS = {
     weaponPrevious = true,
     weaponPreviousLabel = true,
 }
+
+local function clampCenteredUtilityLabel(position, viewportSize, textBounds)
+    if not viewportSize then
+        return position
+    end
+    local halfWidth = math.max(textBounds and textBounds.X * 0.5 or 0, 32)
+    local halfHeight = math.max(textBounds and textBounds.Y * 0.5 or 0, 7)
+    local marginX = halfWidth + 4
+    local marginY = halfHeight + 4
+    return Vector2.new(
+        math.clamp(position.X, marginX, math.max(marginX, viewportSize.X - marginX)),
+        math.clamp(position.Y, marginY, math.max(marginY, viewportSize.Y - marginY))
+    )
+end
 
 local function setVisible(nodes, visible)
     for _, node in pairs(nodes) do
@@ -1753,6 +1781,21 @@ function Overlay:_syncUtilityZones(nodes, count)
     end
 end
 
+function Overlay:_syncUtilityWireframe(nodes, count)
+    nodes.wireframe = nodes.wireframe or {}
+    while #nodes.wireframe < count do
+        table.insert(nodes.wireframe, self.surface:create("Line", {
+            Color = COLORS.danger,
+            Thickness = 2,
+            Visible = false,
+            ZIndex = WORLD_LAYER.utility,
+        }, { pointerEvents = false }))
+    end
+    for index = count + 1, #nodes.wireframe do
+        nodes.wireframe[index].Visible = false
+    end
+end
+
 function Overlay:_paintChams(renderer)
     local paint = self.chamPaint
     if not paint.enabled then
@@ -1807,16 +1850,55 @@ function Overlay:_renderUtilities(observations, enabled)
         local tone = observation.tone
         local color = tone == "danger" and COLORS.danger
             or (tone == "smoke" and COLORS.secondary or COLORS.accent)
-        local markerVisible = enabled and observation.onScreen == true and observation.screenPosition ~= nil
+        local corners = observation.wireframeCorners
+        local wireframeVisible = enabled
+            and observation.markerStyle == "wireframeCube"
+            and observation.onScreen == true
+            and type(corners) == "table"
+            and #corners == 8
+        local markerVisible = enabled
+            and not wireframeVisible
+            and observation.onScreen == true
+            and observation.screenPosition ~= nil
+        local labelPosition
         if markerVisible then
             nodes.marker.Position = observation.screenPosition - Vector2.new(4, 4)
-            nodes.label.Position = observation.screenPosition + Vector2.new(0, 8)
+            labelPosition = observation.screenPosition + Vector2.new(0, 8)
+        elseif wireframeVisible then
+            labelPosition = observation.labelPosition
+                or (observation.screenPosition - Vector2.new(0, 16))
+        end
+        if wireframeVisible then
+            self:_syncUtilityWireframe(nodes, #UTILITY_CUBE_EDGES)
+            for edgeIndex, cornerIndices in ipairs(UTILITY_CUBE_EDGES) do
+                local edge = nodes.wireframe[edgeIndex]
+                edge.From = corners[cornerIndices[1]]
+                edge.To = corners[cornerIndices[2]]
+                edge.Color = color
+                edge.Visible = true
+            end
+        elseif nodes.wireframe then
+            for _, edge in ipairs(nodes.wireframe) do
+                edge.Visible = false
+            end
         end
         nodes.marker.Color = color
         nodes.marker.Visible = markerVisible
-        nodes.label.Color = color
+        nodes.label.Color = wireframeVisible and COLORS.text or color
+        nodes.label.Size = wireframeVisible and 14 or 12
         nodes.label.Text = observation.label or ""
-        nodes.label.Visible = markerVisible
+        if wireframeVisible and labelPosition then
+            local camera = self.context.getCamera()
+            labelPosition = clampCenteredUtilityLabel(
+                labelPosition,
+                camera and camera.ViewportSize,
+                nodes.label.TextBounds
+            )
+        end
+        if labelPosition then
+            nodes.label.Position = labelPosition
+        end
+        nodes.label.Visible = markerVisible or wireframeVisible
 
         local polygons = enabled and observation.polygons or {}
         if not self.immediateUtilityZones then

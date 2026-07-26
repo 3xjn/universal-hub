@@ -35,7 +35,14 @@ luau-lsp analyze \
     modules/Session.lua \
     modules/Overlay.lua \
     games/Counterblox.lua \
-    games/Rivals.lua
+    games/rivals/Adapter.lua \
+    games/rivals/Targeting.lua \
+    games/rivals/ProjectileAim.lua \
+    games/rivals/ShotPresentation.lua \
+    games/rivals/WeaponPolicy.lua \
+    games/rivals/Effects.lua \
+    games/rivals/Movement.lua \
+    games/rivals/CombatState.lua
 
 lune run tests/store_contracts.luau
 lune run tests/remote_loader_contracts.luau
@@ -47,5 +54,6 @@ lune run tests/registry_contracts.luau
 lune run tests/session_contracts.luau
 lune run tests/overlay_contracts.luau
 lune run tests/counterblox_adapter_contracts.luau
+lune run tests/rivals_combat_state_contracts.luau
 lune run tests/rivals_adapter_contracts.luau
 printf 'universal-hub-check-ok\n'

@@ -47,7 +47,14 @@ local Registry = import("modules/Registry")
 local Session = import("modules/Session")
 local Overlay = import("modules/Overlay")
 local Counterblox = import("games/Counterblox")
-local Rivals = import("games/Rivals")
+local Rivals = import("games/rivals/Adapter")
+local RivalsTargeting = import("games/rivals/Targeting")
+local RivalsProjectileAim = import("games/rivals/ProjectileAim")
+local RivalsShotPresentation = import("games/rivals/ShotPresentation")
+local RivalsWeaponPolicy = import("games/rivals/WeaponPolicy")
+local RivalsEffects = import("games/rivals/Effects")
+local RivalsMovement = import("games/rivals/Movement")
+local RivalsCombatState = import("games/rivals/CombatState")
 
 local registry = Registry.new()
 registry:Register(Counterblox)
@@ -313,6 +320,13 @@ local created, result = pcall(adapterDefinition.new, {
         configStore:save(updatedSettings)
     end,
     setThirdPerson = setThirdPerson,
+    rivalsTargeting = RivalsTargeting,
+    projectileAim = RivalsProjectileAim,
+    shotPresentation = RivalsShotPresentation,
+    weaponPolicy = RivalsWeaponPolicy,
+    effects = RivalsEffects,
+    movement = RivalsMovement,
+    combatState = RivalsCombatState,
     store = store,
 })
 if not created then

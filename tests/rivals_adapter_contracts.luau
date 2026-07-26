@@ -5,7 +5,14 @@ Enum = roblox.Enum
 Vector2 = roblox.Vector2
 Vector3 = roblox.Vector3
 
-local Rivals = require("../games/Rivals")
+local Rivals = require("../games/rivals/Adapter")
+local RivalsTargeting = require("../games/rivals/Targeting")
+local RivalsProjectileAim = require("../games/rivals/ProjectileAim")
+local RivalsShotPresentation = require("../games/rivals/ShotPresentation")
+local RivalsWeaponPolicy = require("../games/rivals/WeaponPolicy")
+local RivalsEffects = require("../games/rivals/Effects")
+local RivalsMovement = require("../games/rivals/Movement")
+local RivalsCombatState = require("../games/rivals/CombatState")
 
 assert(Rivals.match({ gameId = 6035872082, placeId = 0 }) == 100)
 assert(Rivals.match({ gameId = 0, placeId = 17625359962 }) == 200)
@@ -23,6 +30,7 @@ assert(
 assert(not table.find(Rivals.capabilities, "wallbang"), "RIVALS must not advertise unverified hit forgery")
 
 local readinessCamera = {}
+local readinessDuel = {}
 local readinessFighter = {}
 local readinessMechanics = {}
 assert(
@@ -37,8 +45,9 @@ assert(
     Rivals.controllersReady(
         readinessCamera,
         readinessFighter,
-        { readinessCamera, readinessFighter, readinessMechanics },
-        readinessMechanics
+        { readinessCamera, readinessDuel, readinessFighter, readinessMechanics },
+        readinessMechanics,
+        readinessDuel
     ) == true,
     "RIVALS may require controllers only after the game's own bootstrap loaded all required modules"
 )
@@ -111,7 +120,7 @@ local cursorCandidate = {
     visible = true,
 }
 assert(
-    Rivals.closestObservation(
+    RivalsTargeting.closestObservation(
         { cursorCandidate, closestCandidate },
         Vector3.zero,
         { maxScreenDistance = 180 }
@@ -119,12 +128,31 @@ assert(
     "Human Aim must prioritize physical distance over cursor distance"
 )
 assert(
-    Rivals.closestObservation(
+    RivalsTargeting.closestObservation(
         { cursorCandidate, closestCandidate },
         Vector3.zero,
         { maxScreenDistance = 40 }
     ) == cursorCandidate,
     "Human Aim must still respect the configured camera FOV"
+)
+assert(
+    RivalsTargeting.closestObservation(
+        {
+            {
+                position = Vector3.new(24, 0, 0),
+                screenDistance = 5000,
+                visible = true,
+            },
+            {
+                position = Vector3.new(10, 0, 0),
+                screenDistance = 9000,
+                visible = true,
+            },
+        },
+        Vector3.zero,
+        { maxDistance = 26.75 }
+    ).position == Vector3.new(10, 0, 0),
+    "Gunblade target acquisition must choose closest world distance without a viewport FOV gate"
 )
 local protectedClosestCandidate = {
     character = protectedFfaCharacter,
@@ -136,7 +164,7 @@ local protectedClosestCandidate = {
 cursorCandidate.character = character(150)
 cursorCandidate.player = enemyPlayer
 assert(
-    Rivals.closestObservation(
+    RivalsTargeting.closestObservation(
         { cursorCandidate, protectedClosestCandidate },
         Vector3.zero,
         {
@@ -155,8 +183,10 @@ local aimRoot = {
     Size = Vector3.new(2, 2, 1),
 }
 local aimHead = {
+    CFrame = CFrame.new(Vector3.new(0, 2, 0)),
     Name = "Head",
     Position = Vector3.new(0, 2, 0),
+    Size = Vector3.new(1.2, 1.2, 1.2),
 }
 local aimCharacter = {
     FindFirstChild = function(_self, name)
@@ -168,7 +198,7 @@ local baseAimObservation = {
     part = aimRoot,
     position = aimRoot.Position,
 }
-local headAim = Rivals.applyAimRates(baseAimObservation, {
+local headAim = RivalsTargeting.applyAimRates(baseAimObservation, {
     headshotRate = 100,
     missRate = 0,
 }, function()
@@ -178,7 +208,80 @@ assert(
     headAim.position == aimHead.Position and headAim.part == aimHead and not headAim.intentionalMiss,
     "A 100% headshot rate must aim at the live Head part"
 )
-local missedAim = Rivals.applyAimRates(baseAimObservation, {
+do
+local lowCameraOrigin = Vector3.new(0, -2, 8)
+local bodyOccluder = {
+    GetAttribute = function()
+        return nil
+    end,
+    IsDescendantOf = function(_self, value)
+        return value == aimCharacter
+    end,
+    Name = "UpperTorso",
+}
+local criticalHeadHitbox = {
+    GetAttribute = function(_self, name)
+        return name == "IsCritical" and true or nil
+    end,
+    IsDescendantOf = function(_self, value)
+        return value == aimCharacter
+    end,
+    Name = "HitboxHead",
+}
+local crownPoint = aimHead.CFrame:PointToWorldSpace(
+    Vector3.new(0, aimHead.Size.Y * 0.45, 0)
+)
+local crownAim = RivalsTargeting.applyAimRates(baseAimObservation, {
+    headshotRate = 100,
+    missRate = 0,
+}, function()
+    return 0
+end, {
+    origin = lowCameraOrigin,
+    raycast = function(raycastOrigin, displacement)
+        local point = raycastOrigin + displacement
+        return {
+            Instance = point == aimHead.Position and bodyOccluder or criticalHeadHitbox,
+        }
+    end,
+})
+assert(
+    crownAim.position == crownPoint and crownAim.part == aimHead,
+    "Head aim must choose the highest exposed crown point when the center is body-occluded"
+)
+local centerAim = RivalsTargeting.applyAimRates(baseAimObservation, {
+    headshotRate = 100,
+    missRate = 0,
+}, function()
+    return 0
+end, {
+    origin = lowCameraOrigin,
+    raycast = function()
+        return { Instance = criticalHeadHitbox }
+    end,
+})
+assert(
+    centerAim.position == aimHead.Position and centerAim.part == aimHead,
+    "Head aim must preserve the normal center point when critical geometry is visible"
+)
+local blockedHeadAim = RivalsTargeting.applyAimRates(baseAimObservation, {
+    headshotRate = 100,
+    missRate = 0,
+}, function()
+    return 0
+end, {
+    origin = lowCameraOrigin,
+    raycast = function()
+        return { Instance = bodyOccluder }
+    end,
+})
+assert(
+    blockedHeadAim.position == baseAimObservation.position
+        and blockedHeadAim.part == baseAimObservation.part,
+    "Head aim must keep the visible body point when no bounded head candidate is exposed"
+)
+end
+local missedAim = RivalsTargeting.applyAimRates(baseAimObservation, {
     headshotRate = 100,
     missRate = 100,
 }, function()
@@ -191,7 +294,7 @@ assert(
     "Miss rate must take priority and produce a stable point outside the target body"
 )
 assert(
-    Rivals.applyAimRates(baseAimObservation, {
+    RivalsTargeting.applyAimRates(baseAimObservation, {
         headshotRate = 0,
         missRate = 0,
     }, function()
@@ -200,9 +303,41 @@ assert(
     "Zero accuracy rates must preserve existing targeting behavior"
 )
 
-assert(Rivals.itemName({ Info = { DisplayName = "Energy Rifle" }, Name = "Internal" }) == "Energy Rifle")
-assert(Rivals.itemName({ Info = { Name = "Handgun" } }) == "Handgun")
-assert(Rivals.itemName(nil) == nil)
+assert(RivalsWeaponPolicy.itemName({ Info = { DisplayName = "Energy Rifle" }, Name = "Internal" }) == "Energy Rifle")
+assert(RivalsWeaponPolicy.itemName({ Info = { Name = "Handgun" } }) == "Handgun")
+assert(RivalsWeaponPolicy.itemName(nil) == nil)
+do
+local riotShield = {
+    Info = {
+        DisplayName = "Riot Shield",
+        MaxAbsorption = 100,
+    },
+    Get = function(_self, field)
+        assert(field == "Ammo", "Shield labels must read the live replicated Ammo field")
+        return 52
+    end,
+}
+assert(
+    RivalsWeaponPolicy.itemLabel(riotShield) == "Riot Shield (52/100)",
+    "Riot Shield weapon text must show current/max durability from Ammo and MaxAbsorption"
+)
+assert(
+    RivalsWeaponPolicy.itemLabel({
+        Info = {
+            DisplayName = "Riot Shield",
+            MaxAbsorption = 100,
+        },
+    }) == "Riot Shield",
+    "Riot Shield weapon text must stay unchanged when current durability is unavailable"
+)
+assert(
+    RivalsWeaponPolicy.itemLabel({
+        Info = { DisplayName = "Burst Rifle" },
+        Data = { Ammo = 18 },
+    }) == "Burst Rifle",
+    "Ordinary weapon labels must not gain an ammo suffix"
+)
+end
 
 local scopedItem = {
     Data = { IsAiming = true },
@@ -214,14 +349,14 @@ local scopeCamera = {
         Target = -50,
     },
 }
-assert(Rivals.adsSettled(scopeCamera, scopedItem) == false)
+assert(RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == false)
 scopeCamera._fov_weapons_spring.Value = -49.75
-assert(Rivals.adsSettled(scopeCamera, scopedItem) == true)
+assert(RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == true)
 scopedItem.Data.IsAiming = false
-assert(Rivals.adsSettled(scopeCamera, scopedItem) == true)
+assert(RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == true)
 
 assert(
-    Rivals.holdToFire({
+    RivalsWeaponPolicy.holdToFire({
         Info = {
             InputSpammingEnabled = { StartShooting = 0 },
             InternalUseCooldown = 0.25,
@@ -230,7 +365,7 @@ assert(
     "Flamethrower-style continuous weapons must hold primary fire"
 )
 assert(
-    Rivals.holdToFire({
+    RivalsWeaponPolicy.holdToFire({
         Info = {
             InputSpammingEnabled = { StartShooting = 0 },
             ShootCooldown = 0.07,
@@ -239,7 +374,7 @@ assert(
     "Fast automatic weapons must hold primary fire"
 )
 assert(
-    Rivals.holdToFire({
+    RivalsWeaponPolicy.holdToFire({
         Info = {
             InputSpammingEnabled = { StartShooting = false },
             ShootCooldown = 0.125,
@@ -248,7 +383,7 @@ assert(
     "Tap-fire weapons must not be inferred as automatic from cooldown alone"
 )
 assert(
-    Rivals.holdToFire({
+    RivalsWeaponPolicy.holdToFire({
         Info = {
             InputSpammingEnabled = { StartShooting = 0 },
             IsProjectile = true,
@@ -268,20 +403,139 @@ local bow = {
         ShootCooldown = 0.25,
     },
 }
-assert(Rivals.bowChargeTime(bow, { health = 40, part = { Name = "Torso" } }) == 1)
-assert(Rivals.bowChargeTime(bow, { health = 70, part = { Name = "Head" } }) == 0.3)
-assert(Rivals.bowChargeTime(bow, { health = 200, part = { Name = "Torso" } }) == 1.8)
-assert(Rivals.bowQuickShotLethal(bow, { health = 30, part = { Name = "Torso" } }) == true)
-assert(Rivals.bowQuickShotLethal(bow, { health = 60, part = { Name = "Head" } }) == true)
-assert(Rivals.bowQuickShotLethal(bow, { health = 31, part = { Name = "Torso" } }) == false)
+assert(RivalsWeaponPolicy.bowChargeTime(bow, { health = 40, part = { Name = "Torso" } }) == 1)
+assert(RivalsWeaponPolicy.bowChargeTime(bow, { health = 70, part = { Name = "Head" } }) == 0.3)
+assert(RivalsWeaponPolicy.bowChargeTime(bow, { health = 200, part = { Name = "Torso" } }) == 1.8)
+assert(RivalsWeaponPolicy.bowQuickShotLethal(bow, { health = 30, part = { Name = "Torso" } }) == true)
+assert(RivalsWeaponPolicy.bowQuickShotLethal(bow, { health = 60, part = { Name = "Head" } }) == true)
+assert(RivalsWeaponPolicy.bowQuickShotLethal(bow, { health = 31, part = { Name = "Torso" } }) == false)
 local similarCooldownBow = {
     Info = table.clone(bow.Info),
 }
 similarCooldownBow.Info.ChargeReleaseCooldown = 0.3
 assert(
-    Rivals.bowQuickShotLethal(similarCooldownBow, { health = 30, part = { Name = "Torso" } }) == false,
+    RivalsWeaponPolicy.bowQuickShotLethal(similarCooldownBow, { health = 30, part = { Name = "Torso" } }) == false,
     "Bow should keep secondary fire when its uncharged release is similarly fast"
 )
+local revolver
+do
+revolver = {
+    Data = {
+        Ammo = 6,
+    },
+    Info = {
+        CriticalDamage = 40,
+        MaxAmmo = 6,
+        QuickShotCooldown = 0.15,
+        QuickShotSpread = 10,
+        DamageFallOffEndDist = 200,
+        DamageFallOffMultiplier = 0.25,
+        DamageFallOffStartDist = 75,
+        ShootCooldown = 0.4,
+        ShootDamage = 30,
+        ShootSpread = 0.5,
+    },
+    Name = "Revolver",
+    _reload_cancel_cooldown = 0,
+    _reload_cancel_expiration = 0,
+    _reload_cooldown = 0,
+    _shoot_cooldown = 0,
+    IsEquipping = false,
+}
+local closeRevolverTarget = {
+    health = 100,
+    part = {
+        Name = "Torso",
+        Size = Vector3.new(2, 2, 1),
+    },
+}
+local closeRevolverAction =
+    RivalsWeaponPolicy.revolverTriggerAction(revolver, closeRevolverTarget, 4, 10)
+assert(
+    closeRevolverAction
+        and closeRevolverAction.kind == "fan"
+        and closeRevolverAction.cooldown == 0.15,
+    "Revolver Trigger Bot must fan only when the target survives one shot and fits inside the quick-shot spread"
+)
+local lethalRevolverAction = RivalsWeaponPolicy.revolverTriggerAction(revolver, {
+    health = 30,
+    part = closeRevolverTarget.part,
+}, 4, 10)
+assert(
+    lethalRevolverAction
+        and lethalRevolverAction.kind == "precise"
+        and lethalRevolverAction.cooldown == 0.4,
+    "Revolver Trigger Bot must prefer one precise shot when it is already lethal"
+)
+local rangedRevolverAction =
+    RivalsWeaponPolicy.revolverTriggerAction(revolver, closeRevolverTarget, 30, 10)
+assert(
+    rangedRevolverAction and rangedRevolverAction.kind == "precise",
+    "Revolver Trigger Bot must use the smaller normal-shot cone when the full fan cone is unsafe"
+)
+local narrowRevolverTarget = {
+    health = 100,
+    part = {
+        Name = "Torso",
+        Size = Vector3.new(0.5, 0.5, 1),
+    },
+}
+assert(
+    RivalsWeaponPolicy.revolverTriggerAction(revolver, narrowRevolverTarget, 30, 10) == nil,
+    "Revolver Trigger Bot must decline a shot when the selected hit area cannot contain the full precise cone"
+)
+revolver.IsEquipping = true
+assert(
+    RivalsWeaponPolicy.revolverTriggerAction(revolver, closeRevolverTarget, 4, 10) == nil,
+    "Revolver Trigger Bot must honor the live boolean IsEquipping gate"
+)
+revolver.IsEquipping = false
+local farRevolverTarget = {
+    health = 10,
+    part = closeRevolverTarget.part,
+}
+assert(
+    math.abs(RivalsWeaponPolicy.damageAtDistance(revolver, farRevolverTarget, 200) - 7.5) < 1e-6,
+    "Revolver damage must honor the live DamageFallOff fields"
+)
+assert(
+    RivalsWeaponPolicy.triggerDamageReady(revolver, farRevolverTarget, 200) == false,
+    "Revolver Trigger Bot must recognize severe falloff from the live DamageFallOff fields"
+)
+revolver._shoot_cooldown = 11
+assert(
+    RivalsWeaponPolicy.revolverTriggerAction(revolver, closeRevolverTarget, 4, 10) == nil,
+    "Revolver Trigger Bot must wait for the live gun cooldown"
+)
+revolver._shoot_cooldown = 0
+revolver._reload_cooldown = 11
+revolver._reload_cancel_cooldown = 11
+revolver._reload_cancel_expiration = 0
+assert(
+    RivalsWeaponPolicy.revolverTriggerAction(revolver, closeRevolverTarget, 4, 10) == nil,
+    "Revolver Trigger Bot must not shoot through a non-cancellable reload"
+)
+revolver._reload_cooldown = 0
+revolver._reload_cancel_cooldown = 0
+revolver.Data.Ammo = 0
+assert(
+    RivalsWeaponPolicy.revolverTriggerAction(revolver, closeRevolverTarget, 4, 10) == nil,
+    "Revolver Trigger Bot must not invent ammo"
+)
+revolver.Data.Ammo = 6
+revolver._is_revolver_quick_shooting = 11
+assert(
+    RivalsWeaponPolicy.revolverTriggerAction(revolver, closeRevolverTarget, 30, 10) == nil,
+    "Revolver Trigger Bot must wait rather than request a precise shot during the live fan-fire lock"
+)
+local lockedCloseAction =
+    RivalsWeaponPolicy.revolverTriggerAction(revolver, closeRevolverTarget, 4, 10)
+assert(
+    lockedCloseAction and lockedCloseAction.kind == "fan",
+    "Revolver Trigger Bot may continue an already-locked fan sequence only at reliable close range"
+)
+revolver._is_revolver_quick_shooting = nil
+end
 local shorty = {
     Info = {
         CriticalDamage = 112.5,
@@ -292,33 +546,188 @@ local shorty = {
     },
 }
 assert(
-    type(Rivals.damageAtDistance) == "function"
-        and type(Rivals.triggerDamageReady) == "function",
+    type(RivalsWeaponPolicy.damageAtDistance) == "function"
+        and type(RivalsWeaponPolicy.triggerDamageReady) == "function",
     "Trigger Bot must expose a range-aware damage decision"
 )
-assert(Rivals.damageAtDistance(shorty, { part = { Name = "Torso" } }, 10) == 75)
-assert(math.abs(Rivals.damageAtDistance(shorty, { part = { Name = "Torso" } }, 25) - 24.975) < 1e-6)
+assert(RivalsWeaponPolicy.damageAtDistance(shorty, { part = { Name = "Torso" } }, 10) == 75)
+assert(math.abs(RivalsWeaponPolicy.damageAtDistance(shorty, { part = { Name = "Torso" } }, 25) - 24.975) < 1e-6)
 assert(
-    Rivals.triggerDamageReady(shorty, { health = 150, part = { Name = "Torso" } }, 20) == false,
+    RivalsWeaponPolicy.triggerDamageReady(shorty, { health = 150, part = { Name = "Torso" } }, 20) == false,
     "Trigger Bot must wait instead of wasting a severe-falloff body shot"
 )
 assert(
-    Rivals.triggerDamageReady(shorty, { health = 40, part = { Name = "Torso" } }, 20) == true,
+    RivalsWeaponPolicy.triggerDamageReady(shorty, { health = 40, part = { Name = "Torso" } }, 20) == true,
     "Trigger Bot must take a reduced-damage shot when it is still lethal"
 )
 assert(
-    Rivals.triggerDamageReady(shorty, { health = 60, part = { Name = "Head" } }, 20) == true,
+    RivalsWeaponPolicy.triggerDamageReady(shorty, { health = 60, part = { Name = "Head" } }, 20) == true,
     "Trigger Bot must use critical damage when evaluating a lethal falloff shot"
 )
 assert(
-    Rivals.triggerDamageReady(shorty, { health = 150, part = { Name = "Torso" } }, 12) == true,
+    RivalsWeaponPolicy.triggerDamageReady(shorty, { health = 150, part = { Name = "Torso" } }, 12) == true,
     "Trigger Bot must accept near-full damage inside the useful falloff edge"
 )
 assert(
-    Rivals.triggerDamageReady({ Info = { ShootDamage = 12 } }, { health = 150 }, 200) == true,
+    RivalsWeaponPolicy.triggerDamageReady({ Info = { ShootDamage = 12 } }, { health = 150 }, 200) == true,
     "Weapons without falloff metadata must keep normal Trigger Bot behavior"
 )
-assert(Rivals.isSplashProjectile({
+local gunbladeMode = "blade"
+local gunblade
+do
+gunblade = {
+    Info = {
+        BladeCooldown = 0.5,
+        BladeModeMobileInputSettings = {
+            Aim = false,
+            Inspect = false,
+            Shoot = false,
+        },
+        BladeReach = 8,
+        DashCooldown = 1.5,
+        DashDuration = 0.1875,
+        DashSpeed = 100,
+        DisplayName = "Gunblade",
+        MobileInputSettings = {
+            Aim = true,
+            Inspect = false,
+            Shoot = false,
+        },
+        ShootCooldown = 0.75,
+        TransitionCooldown = 0.6,
+    },
+}
+function gunblade:GetMobileInputSettings()
+    if gunbladeMode == "blade" then
+        return self.Info.BladeModeMobileInputSettings
+    end
+    return self.Info.MobileInputSettings
+end
+function gunblade:CanQuickAttack()
+    return self.quickAttackReady ~= false
+end
+assert(
+    RivalsWeaponPolicy.gunbladeMode(gunblade) == "blade"
+        and RivalsWeaponPolicy.gunbladeDashRange(gunblade) == 26.75,
+    "Gunblade policy must use its live input mode and configured dash travel plus blade reach"
+)
+local gunbladeTarget = {}
+local gunbladeState, gunbladeAction = RivalsWeaponPolicy.gunbladeTriggerAction(
+    nil,
+    gunblade,
+    gunbladeTarget,
+    20,
+    10
+)
+assert(
+    gunbladeState.phase == "strike"
+        and gunbladeAction.kind == "dash"
+        and gunbladeAction.cooldown == 1.5,
+    "Gunblade Trigger Bot must dash first when Blade mode is inside the confirmed combo range"
+)
+gunblade.quickAttackReady = false
+local waitingState, waitingAction = RivalsWeaponPolicy.gunbladeTriggerAction(
+    gunbladeState,
+    gunblade,
+    gunbladeTarget,
+    7,
+    10 + 1 / 120
+)
+assert(
+    waitingState == gunbladeState and waitingAction == nil,
+    "Gunblade Trigger Bot must wait until the live item allows its blade quick attack"
+)
+gunblade.quickAttackReady = true
+gunbladeState, gunbladeAction = RivalsWeaponPolicy.gunbladeTriggerAction(
+    gunbladeState,
+    gunblade,
+    gunbladeTarget,
+    7,
+    10 + 1 / 60
+)
+assert(
+    gunbladeState.phase == "awaitGun"
+        and gunbladeAction.kind == "strike"
+        and gunbladeAction.cooldown == 0.5,
+    "Gunblade Trigger Bot must strike on the first frame that its dash reaches blade range"
+)
+local stuckBladeResult = { expectedState = gunbladeState }
+stuckBladeResult.state, stuckBladeResult.action = RivalsWeaponPolicy.gunbladeTriggerAction(
+    gunbladeState,
+    gunblade,
+    gunbladeTarget,
+    7,
+    10.7875
+)
+gunbladeMode = "gun"
+waitingState, waitingAction = RivalsWeaponPolicy.gunbladeTriggerAction(
+    gunbladeState,
+    gunblade,
+    gunbladeTarget,
+    7,
+    10.2
+)
+assert(
+    waitingState == gunbladeState and waitingAction == nil,
+    "Gunblade Trigger Bot must respect the configured transition cooldown before shooting"
+)
+gunbladeState, gunbladeAction = RivalsWeaponPolicy.gunbladeTriggerAction(
+    gunbladeState,
+    gunblade,
+    gunbladeTarget,
+    7,
+    10.7875
+)
+assert(
+    gunbladeState.phase == "awaitBlade"
+        and gunbladeAction.kind == "shoot"
+        and gunbladeAction.cooldown == 0.75,
+    "Gunblade Trigger Bot must shoot only after the live item transitions back to Gun mode"
+)
+local stuckGunResult = { expectedState = gunbladeState }
+stuckGunResult.state, stuckGunResult.action = RivalsWeaponPolicy.gunbladeTriggerAction(
+    gunbladeState,
+    gunblade,
+    gunbladeTarget,
+    7,
+    11.5375
+)
+assert(
+    stuckBladeResult.state == stuckBladeResult.expectedState
+        and stuckBladeResult.action == nil
+        and stuckGunResult.state == stuckGunResult.expectedState
+        and stuckGunResult.action == nil,
+    ("Gunblade Trigger Bot must wait for observed mode transitions (stuck Blade=%s, stuck Gun=%s)"):format(
+        stuckBladeResult.action and stuckBladeResult.action.kind or "none",
+        stuckGunResult.action and stuckGunResult.action.kind or "none"
+    )
+)
+gunbladeMode = "blade"
+gunbladeState, gunbladeAction = RivalsWeaponPolicy.gunbladeTriggerAction(
+    gunbladeState,
+    gunblade,
+    gunbladeTarget,
+    7,
+    11.5375
+)
+assert(
+    gunbladeState.phase == "strike" and gunbladeAction.kind == "dash",
+    "Gunblade Trigger Bot must restart the dash-strike cycle after Blade mode returns"
+)
+local resetState, resetAction = RivalsWeaponPolicy.gunbladeTriggerAction(
+    gunbladeState,
+    gunblade,
+    {},
+    30,
+    12
+)
+assert(
+    resetState == nil and resetAction == nil,
+    "Gunblade Trigger Bot must reset when the target changes and leaves the confirmed combo range"
+)
+end
+gunbladeMode = "gun"
+assert(RivalsProjectileAim.isSplashProjectile({
     Info = {
         DamageType = "Splash",
         IsProjectile = true,
@@ -326,7 +735,7 @@ assert(Rivals.isSplashProjectile({
         ShootExplosionRadius = 16,
     },
 }) == true)
-assert(Rivals.isSplashProjectile({
+assert(RivalsProjectileAim.isSplashProjectile({
     Info = {
         DamageType = "Bullet",
         IsProjectile = false,
@@ -336,7 +745,7 @@ assert(Rivals.isSplashProjectile({
 
 local origin = Vector3.new(0, 2, 0)
 local targetPosition = Vector3.new(10, 5, -20)
-local rotation = Rivals.rotationToward(origin, targetPosition)
+local rotation = RivalsTargeting.rotationToward(origin, targetPosition)
 local rotationFrame = CFrame.Angles(0, rotation.Y, 0) * CFrame.Angles(rotation.X, 0, 0)
 assert(
     rotationFrame.LookVector:Dot((targetPosition - origin).Unit) > 0.999,
@@ -392,7 +801,7 @@ local function corridorRaycast(rayOrigin, rayDirection)
 end
 local ricochetTarget = Vector3.new(10, 1, 0)
 local ricochetDirection = (Vector3.new(10, -3, 0) - Vector3.new(0, 1, 0)).Unit
-local ricochet = Rivals.traceRicochet(
+local ricochet = RivalsProjectileAim.traceRicochet(
     Vector3.new(0, 1, 0),
     ricochetDirection,
     ricochetTarget,
@@ -405,7 +814,7 @@ assert(
     ricochet and ricochet.bounces == 2,
     "Energy Rifle tracing must verify the same two-reflection path used by the game"
 )
-local solvedRicochet = Rivals.solveRicochet(
+local solvedRicochet = RivalsProjectileAim.solveRicochet(
     Vector3.new(0, 1, 0),
     ricochetTarget,
     corridorRaycast,
@@ -435,7 +844,7 @@ local splashTarget = {
     },
     position = Vector3.new(10, 3, 0),
 }
-local splashAim = Rivals.solveSplashAim(
+local splashAim = RivalsProjectileAim.solveSplashAim(
     Vector3.new(0, 3, 0),
     splashTarget,
     {
@@ -454,7 +863,7 @@ assert(
         and (splashAim.impact - splashAim.predictedPosition).Magnitude <= 16,
     "Splash aiming must lead the player and verify the nearest environment impact inside blast radius"
 )
-local latencySplashAim = Rivals.solveSplashAim(
+local latencySplashAim = RivalsProjectileAim.solveSplashAim(
     Vector3.new(0, 3, 0),
     splashTarget,
     {
@@ -481,7 +890,7 @@ local function earlyWallRaycast(rayOrigin, rayDirection)
         Position = rayOrigin + rayDirection * scale,
     }
 end
-local unsafeEarlyImpact = Rivals.solveSplashAim(
+local unsafeEarlyImpact = RivalsProjectileAim.solveSplashAim(
     Vector3.zero,
     {
         part = {
@@ -509,7 +918,7 @@ assert(
         and latencySplashAim.predictedPosition.X > splashAim.predictedPosition.X + 0.4,
     "RPG prediction must add observed network latency to moving-target lead"
 )
-local daggerAim = Rivals.solveProjectileAim(
+local daggerAim = RivalsProjectileAim.solveProjectileAim(
     Vector3.new(0, 3, 0),
     {
         part = {
@@ -531,8 +940,44 @@ assert(
         and daggerAim.flightTime > 0,
     "Dagger aiming must lead target movement and compensate for its measured projectile gravity"
 )
+do
+local bowCameraOrigin = Vector3.new(0, 5, 0)
+local bowInfo = {
+    ProjectileGravity = 0.25,
+    ProjectileLifetime = 5,
+    ProjectileSpawnOffset = CFrame.new(0, -1, -2),
+    ProjectileSpeed = 300,
+}
+local bowAim = RivalsProjectileAim.solveProjectileAim(
+    bowCameraOrigin,
+    {
+        part = {
+            AssemblyLinearVelocity = Vector3.new(0, 0, 12),
+        },
+        position = Vector3.new(60, 5, 0),
+    },
+    bowInfo,
+    196.2
+)
+local bowLaunchFrame = CFrame.lookAt(
+    bowCameraOrigin,
+    bowCameraOrigin + bowAim.direction
+)
+local expectedBowLaunchOrigin =
+    (bowLaunchFrame * bowInfo.ProjectileSpawnOffset).Position
+local bowImpact = bowAim.launchOrigin
+    + bowAim.direction * (bowInfo.ProjectileSpeed * bowAim.flightTime)
+    + Vector3.new(0, -196.2 * bowInfo.ProjectileGravity, 0)
+        * (0.5 * bowAim.flightTime * bowAim.flightTime)
+assert(
+    (bowAim.launchOrigin - expectedBowLaunchOrigin).Magnitude < 0.01
+        and (bowAim.launchOrigin - bowCameraOrigin).Magnitude > 1
+        and (bowImpact - bowAim.predictedPosition).Magnitude < 0.05,
+    "Bow prediction must solve from its native camera-space projectile spawn offset"
+)
+end
 
-local smoothedRotation = Rivals.smoothRotation(
+local smoothedRotation = RivalsTargeting.smoothRotation(
     Vector2.zero,
     Vector2.new(0.5, math.pi - 0.1),
     100,
@@ -546,18 +991,18 @@ assert(
     "Maximum Camera Aim smoothness must move toward the target without snapping"
 )
 assert(
-    Rivals.smoothRotation(Vector2.zero, Vector2.new(0.5, 1), 0, 1 / 60)
+    RivalsTargeting.smoothRotation(Vector2.zero, Vector2.new(0.5, 1), 0, 1 / 60)
         == Vector2.new(0.5, 1),
     "Zero Camera Aim smoothness must preserve instant rotation"
 )
 
 assert(
-    type(Rivals.humanRotation) == "function",
+    type(RivalsTargeting.humanRotation) == "function",
     "Human Aim must provide motion-responsive curved tracking"
 )
 local humanAimState = { curveSign = 1 }
 local humanStartTarget = Vector2.new(0, 0.35)
-local humanStart = Rivals.humanRotation(
+local humanStart = RivalsTargeting.humanRotation(
     Vector2.zero,
     humanStartTarget,
     70,
@@ -565,8 +1010,8 @@ local humanStart = Rivals.humanRotation(
     humanAimState
 )
 local fastHumanTarget = Vector2.new(0, 0.5)
-local fixedSpeedFollow = Rivals.smoothRotation(humanStart, fastHumanTarget, 70, 1 / 60)
-local adaptiveFollow = Rivals.humanRotation(
+local fixedSpeedFollow = RivalsTargeting.smoothRotation(humanStart, fastHumanTarget, 70, 1 / 60)
+local adaptiveFollow = RivalsTargeting.humanRotation(
     humanStart,
     fastHumanTarget,
     70,
@@ -601,9 +1046,9 @@ local knifeInfo = {
     HeavyAttackReach = 7,
     CriticalDamage = 150,
 }
-assert(Rivals.backstabReady(Vector3.new(0, 0, 0), knifeObservation, knifeInfo) == true)
-assert(Rivals.backstabReady(Vector3.new(10, 0, 0), knifeObservation, knifeInfo) == false)
-local knifeApproach = Rivals.backstabPlan(
+assert(RivalsWeaponPolicy.backstabReady(Vector3.new(0, 0, 0), knifeObservation, knifeInfo) == true)
+assert(RivalsWeaponPolicy.backstabReady(Vector3.new(10, 0, 0), knifeObservation, knifeInfo) == false)
+local knifeApproach = RivalsWeaponPolicy.backstabPlan(
     Vector3.new(10, 0, 0),
     knifeObservation,
     knifeInfo
@@ -618,29 +1063,29 @@ assert(
     "Knife backstab planning must use the nearest lethal rear position"
 )
 assert(
-    Rivals.backstabReady(Vector3.new(3, 0, 6), knifeObservation, knifeInfo) == true,
+    RivalsWeaponPolicy.backstabReady(Vector3.new(3, 0, 6), knifeObservation, knifeInfo) == true,
     "Knife backstab readiness must accept a lenient rear angle inside heavy-attack reach"
 )
 assert(
-    Rivals.backstabReady(Vector3.new(5, 0, 6), knifeObservation, knifeInfo) == true,
+    RivalsWeaponPolicy.backstabReady(Vector3.new(5, 0, 6), knifeObservation, knifeInfo) == true,
     "Knife backstab readiness must accept the server's lenient side-plane window"
 )
 assert(
-    Rivals.backstabReady(Vector3.new(-1.5, 0, 0), knifeObservation, knifeInfo) == true,
+    RivalsWeaponPolicy.backstabReady(Vector3.new(-1.5, 0, 0), knifeObservation, knifeInfo) == true,
     "Knife backstab readiness must use the live 7-stud heavy-attack reach"
 )
 knifeObservation.health = 151
 assert(
-    Rivals.backstabReady(Vector3.new(0, 0, 0), knifeObservation, knifeInfo) == false,
+    RivalsWeaponPolicy.backstabReady(Vector3.new(0, 0, 0), knifeObservation, knifeInfo) == false,
     "Knife Camera Aim must not turn for a backstab that cannot eliminate the target"
 )
 knifeObservation.health = 150
 assert(
-    Rivals.backstabReady(Vector3.new(-2.1, 0, 0), knifeObservation, knifeInfo) == false,
+    RivalsWeaponPolicy.backstabReady(Vector3.new(-2.1, 0, 0), knifeObservation, knifeInfo) == false,
     "Knife backstab readiness must reject targets beyond heavy-attack reach"
 )
 
-local slingshotAim = Rivals.solveSlingshot(
+local slingshotAim = RivalsProjectileAim.solveSlingshot(
     Vector3.new(0, 5, 0),
     {
         part = {
@@ -663,7 +1108,7 @@ assert(
     "Slingshot aiming must simulate and verify its physical wall bounce before aligning"
 )
 
-local projectedSegments = Rivals.projectTrajectory({
+local projectedSegments = RivalsProjectileAim.projectTrajectory({
     WorldToViewportPoint = function(_self, point)
         return Vector3.new(point.X, point.Y, 1), true
     end,
@@ -679,15 +1124,42 @@ assert(
     "Bounce ESP must project every verified wall segment"
 )
 
+local cameraHarness = {
+    bound = {},
+    boundCount = 0,
+    rotationDeltaDisconnected = false,
+    unbound = {},
+    unboundCount = 0,
+}
 local rotationCalls = 0
 local cameraModule = {
     Rotation = Vector2.zero,
+    RotationDeltaApplied = {
+        Connect = function(_signal, callback)
+            cameraHarness.rotationDeltaCallback = callback
+            return {
+                Disconnect = function()
+                    cameraHarness.rotationDeltaDisconnected = true
+                    cameraHarness.rotationDeltaCallback = nil
+                end,
+            }
+        end,
+    },
     SetRotation = function(self, value)
         rotationCalls += 1
         self.Rotation = value
     end,
 }
 local targetItem = { Info = { Name = "Rifle" } }
+local targetShield = {
+    Info = {
+        Name = "Riot Shield",
+        MaxAbsorption = 100,
+    },
+    Get = function(_self, field)
+        return field == "Ammo" and 52 or nil
+    end,
+}
 local localItem = { Name = "Burst Rifle", Info = { DisplayName = "Burst Rifle" } }
 local sliding = false
 local grounded = true
@@ -717,6 +1189,8 @@ local fighterModule = {
             return grounded
         end,
         GetCameraData = function()
+            cameraHarness.cameraDataFrameAtCall = cameraHarness.camera.CFrame
+            cameraHarness.cameraDataRotationAtCall = cameraModule.Rotation
             local cameraData = table.clone(originalCameraData)
             for _, key in ipairs({ cameraByte0, cameraByte1 }) do
                 local record = table.clone(cameraData[key])
@@ -738,15 +1212,29 @@ local fighterModule = {
     },
     _player_to_fighter = {
         [enemyPlayer] = {
-            EquippedItem = targetItem,
+            EquippedItem = targetShield,
         },
     },
 }
 cameraModule._current_subject = fighterModule.LocalFighter
 local cameraScript = {}
+local duelScript = {}
 local fighterScript = {}
 local controlsScript = {}
 local mechanicsScript = {}
+local activeDuel = {
+    Data = {
+        Status = "RoundStarted",
+    },
+}
+local loadoutOpen = false
+local duelModule = {
+    GetDuel = function()
+        return fighterModule.LocalFighter.Data.IsInDuel == true
+            and activeDuel
+            or nil
+    end,
+}
 local toggledInputs = {}
 local wHeld = false
 local controlsModule = {
@@ -780,6 +1268,9 @@ function controllers:WaitForChild(name)
     if name == "CameraController" then
         return cameraScript
     end
+    if name == "DuelController" then
+        return duelScript
+    end
     if name == "FighterController" then
         return fighterScript
     end
@@ -805,6 +1296,25 @@ local RunService = {
             }
         end,
     },
+    BindToRenderStep = function(_service, name, priority, callback)
+        if not cameraHarness.bound[name] then
+            cameraHarness.boundCount += 1
+        end
+        cameraHarness.bound[name] = {
+            callback = callback,
+            priority = priority,
+        }
+    end,
+    UnbindFromRenderStep = function(_service, name)
+        if cameraHarness.bound[name] then
+            cameraHarness.boundCount -= 1
+            cameraHarness.bound[name] = nil
+        end
+        if not cameraHarness.unbound[name] then
+            cameraHarness.unboundCount += 1
+            cameraHarness.unbound[name] = true
+        end
+    end,
 }
 local mousePosition = Vector2.new(640, 360)
 local movementDirection = Vector3.zero
@@ -816,14 +1326,42 @@ local UserInputService = {
         return input == Enum.KeyCode.W and wHeld
     end,
 }
-local Workspace = {
-    CurrentCamera = {
-        CFrame = CFrame.new(origin),
-        WorldToViewportPoint = function()
-            return Vector3.new(640, 360, 1), true
-        end,
-    },
+cameraHarness.camera = {
+    CFrame = CFrame.new(origin),
+    WorldToViewportPoint = function()
+        return Vector3.new(640, 360, 1), true
+    end,
 }
+local Workspace = {
+    CurrentCamera = cameraHarness.camera,
+}
+function cameraHarness.frameForRotation(value)
+    return CFrame.new(origin)
+        * CFrame.Angles(0, value.Y, 0)
+        * CFrame.Angles(value.X, 0, 0)
+end
+function cameraHarness.runCameraRenderFrame()
+    local steps = {}
+    for _, step in pairs(cameraHarness.bound) do
+        table.insert(steps, step)
+    end
+    table.sort(steps, function(left, right)
+        return left.priority < right.priority
+    end)
+    local cameraUpdated = false
+    for _, step in ipairs(steps) do
+        if not cameraUpdated and step.priority > Enum.RenderPriority.Camera.Value then
+            cameraHarness.camera.CFrame =
+                cameraHarness.frameForRotation(cameraModule.Rotation)
+            cameraUpdated = true
+        end
+        step.callback()
+    end
+    if not cameraUpdated then
+        cameraHarness.camera.CFrame =
+            cameraHarness.frameForRotation(cameraModule.Rotation)
+    end
+end
 local throwableAttributes = {
     DisplayName = "Smoke Grenade",
     EnvironmentID = "PracticeA",
@@ -841,7 +1379,7 @@ local throwableModel = {
         return false
     end,
 }
-local smokeObservation = Rivals.throwableObservation(
+local smokeObservation = RivalsEffects.throwableObservation(
     Workspace.CurrentCamera,
     throwableModel,
     "PracticeA"
@@ -854,15 +1392,180 @@ assert(
     "RIVALS throwable discovery must classify replicated item metadata into a compact ESP marker"
 )
 assert(
-    Rivals.throwableObservation(Workspace.CurrentCamera, throwableModel, "OtherMatch") == nil,
+    RivalsEffects.throwableObservation(Workspace.CurrentCamera, throwableModel, "OtherMatch") == nil,
     "Throwable ESP must exclude projectiles from another environment"
 )
 throwableAttributes.Exploded = true
 assert(
-    Rivals.throwableObservation(Workspace.CurrentCamera, throwableModel, "PracticeA") == nil,
+    RivalsEffects.throwableObservation(Workspace.CurrentCamera, throwableModel, "PracticeA") == nil,
     "Throwable ESP must drop completed projectiles"
 )
 throwableAttributes.Exploded = nil
+
+do
+local utilityWorld = {
+    Name = "Workspace",
+}
+local utilityEnvironment = {
+    Name = "Match",
+    Parent = utilityWorld,
+    GetAttribute = function(_self, name)
+        return name == "EnvironmentID" and "PracticeA" or nil
+    end,
+}
+local tripmineAttributes = {
+    HitboxDelay = 1,
+    ObjectID = "mine-1",
+    PlacedByUserID = 123,
+    TeamID = "Red",
+}
+local tripminePart = {
+    CFrame = CFrame.new(origin + Vector3.new(16, 0, 0)),
+    Position = origin + Vector3.new(16, 0, 0),
+    Size = Vector3.new(4, 3, 4),
+}
+local tripmineModel = {
+    Name = "Object",
+    Parent = utilityEnvironment,
+    PrimaryPart = tripminePart,
+    GetBoundingBox = function()
+        return tripminePart.CFrame, tripminePart.Size
+    end,
+    GetAttribute = function(_self, name)
+        return tripmineAttributes[name]
+    end,
+    HasTag = function(_self, tag)
+        return tag == "SubspaceTripmine"
+    end,
+    IsA = function()
+        return false
+    end,
+}
+local tripmineCamera = {
+    CFrame = Workspace.CurrentCamera.CFrame,
+    WorldToViewportPoint = function(_self, position)
+        return Vector3.new(640 + position.X * 10, 360 - position.Y * 10, position.Z + 50), true
+    end,
+}
+local tripmineObservation = RivalsEffects.throwableObservation(
+    tripmineCamera,
+    tripmineModel,
+    "PracticeA",
+    utilityWorld
+)
+assert(
+    tripmineObservation
+        and tripmineObservation.label == "TRIPMINE"
+        and tripmineObservation.tone == "danger"
+        and tripmineObservation.markerStyle == "wireframeCube"
+        and #tripmineObservation.wireframeCorners == 8
+        and tripmineObservation.labelPosition.Y < tripmineObservation.screenPosition.Y,
+    "Utility ESP must publish the live Tripmine bounds as a readable projected cube"
+)
+assert(
+    RivalsEffects.throwableObservation(
+        tripmineCamera,
+        tripmineModel,
+        "OtherMatch",
+        utilityWorld
+    ) == nil,
+    "Tagged utility ESP must inherit EnvironmentID filtering from the replicated world hierarchy"
+)
+
+local jumpPadHitbox = {
+    Name = "Hitbox",
+    Parent = utilityEnvironment,
+    Position = origin + Vector3.new(20, 0, 0),
+    GetAttribute = function()
+        return nil
+    end,
+    HasTag = function(_self, tag)
+        return tag == "JumpPadHitbox"
+    end,
+    IsA = function(_self, className)
+        return className == "BasePart"
+    end,
+}
+local jumpPadObservation = RivalsEffects.throwableObservation(
+    Workspace.CurrentCamera,
+    jumpPadHitbox,
+    "PracticeA",
+    utilityWorld
+)
+assert(
+    jumpPadObservation
+        and jumpPadObservation.label == "JUMP PAD"
+        and jumpPadObservation.tone == "accent",
+    "Utility ESP must identify comparable persistent utility hitboxes from their live tag"
+)
+
+for displayName, expectedLabel in pairs({
+    Elixir = "ELIXIR",
+    Satchel = "SATCHEL",
+    Warpstone = "WARPSTONE",
+}) do
+    throwableAttributes.DisplayName = displayName
+    local observation = RivalsEffects.throwableObservation(
+        Workspace.CurrentCamera,
+        throwableModel,
+        "PracticeA"
+    )
+    assert(
+        observation and observation.label == expectedLabel,
+        ("Utility ESP must classify the live %s throwable metadata"):format(displayName)
+    )
+end
+throwableAttributes.DisplayName = "Smoke Grenade"
+
+local viewModels = {
+    Name = "ViewModels",
+    Parent = utilityWorld,
+}
+local heldTripmine = {
+    Name = "Subspace Tripmine",
+    Parent = viewModels,
+    PrimaryPart = {
+        Position = origin + Vector3.new(8, 0, 0),
+    },
+    GetAttribute = function()
+        return nil
+    end,
+    IsA = function()
+        return false
+    end,
+}
+assert(
+    RivalsEffects.throwableObservation(
+        Workspace.CurrentCamera,
+        heldTripmine,
+        "PracticeA",
+        utilityWorld
+    ) == nil,
+    "Utility ESP must not turn a held weapon or first-person viewmodel into a world marker"
+)
+
+local requestedUtilityTags = {}
+local effectsDiscovery = RivalsEffects.new({
+    collectionService = {
+        GetTagged = function(_self, tag)
+            requestedUtilityTags[tag] = true
+            return {}
+        end,
+    },
+    localPlayer = {},
+    projectileAim = {},
+    workspace = {
+        FindFirstChild = function()
+            return nil
+        end,
+    },
+})
+effectsDiscovery:_collectThrowables()
+assert(
+    requestedUtilityTags.SubspaceTripmine and requestedUtilityTags.JumpPadHitbox,
+    "Utility discovery must query the live persistent-utility tags alongside throwable tags"
+)
+end
 
 local flashEffect = {
     Enabled = true,
@@ -888,7 +1591,7 @@ local smokeRoot = {
     end,
 }
 local suppressedVisuals = {}
-Rivals.updateVisualSuppressions({
+RivalsEffects.updateVisualSuppressions({
     noFlash = true,
     noSmoke = true,
 }, {
@@ -902,7 +1605,7 @@ assert(
     flashEffect.Enabled == false and smokeEffect.Enabled == false,
     "No Flash and No Smoke must suppress only their client-visible effect instances"
 )
-Rivals.updateVisualSuppressions({}, {}, suppressedVisuals)
+RivalsEffects.updateVisualSuppressions({}, {}, suppressedVisuals)
 assert(
     flashEffect.Enabled == true and smokeEffect.Enabled == true,
     "Disabling visual suppression must restore each effect's original state"
@@ -1085,6 +1788,9 @@ local throwableObserveCalls = 0
 local loadedModuleChecks = 0
 local hookImplementations = {}
 local restoredHooks = {}
+local triggerCameraCaptureEnabled = false
+local triggerCameraDataAtClick
+local triggerRayAtClick
 local rendered
 local inputCaptured = false
 local environmentCast = function()
@@ -1103,6 +1809,9 @@ local adapter = Rivals.new({
     clock = function()
         return currentTime
     end,
+    itemClock = function()
+        return currentTime
+    end,
     getNetworkPing = function()
         return 0.035
     end,
@@ -1114,7 +1823,7 @@ local adapter = Rivals.new({
         if loadedModuleChecks == 1 then
             return { cameraScript }
         end
-        return { cameraScript, fighterScript, mechanicsScript }
+        return { cameraScript, duelScript, fighterScript, mechanicsScript }
     end,
     hookFunction = function(targetFunction, replacement)
         hookImplementations[targetFunction] = replacement
@@ -1122,6 +1831,13 @@ local adapter = Rivals.new({
     end,
     click = function()
         clicks += 1
+        if triggerCameraCaptureEnabled then
+            local cameraDataHook =
+                hookImplementations[fighterModule.LocalFighter.GetCameraData]
+            assert(cameraDataHook, "Trigger Bot must fire through the installed camera-data hook")
+            triggerCameraDataAtClick, triggerRayAtClick =
+                cameraDataHook(fighterModule.LocalFighter)
+        end
     end,
     collectionService = {
         GetTagged = function(_self, tag)
@@ -1193,6 +1909,9 @@ local adapter = Rivals.new({
         if module == fighterScript then
             return fighterModule
         end
+        if module == duelScript then
+            return duelModule
+        end
         return module == mechanicsScript and mechanicsModule or controlsModule
     end,
     restoreFunction = function(targetFunction)
@@ -1226,6 +1945,18 @@ local adapter = Rivals.new({
             },
         }
     end,
+    rivalsTargeting = RivalsTargeting,
+    projectileAim = RivalsProjectileAim,
+    shotPresentation = RivalsShotPresentation,
+    weaponPolicy = RivalsWeaponPolicy,
+    effects = RivalsEffects,
+    movement = RivalsMovement,
+    combatState = RivalsCombatState,
+    pickWeaponsPage = {
+        IsOpen = function()
+            return loadoutOpen
+        end,
+    },
     store = store,
     wait = function() end,
 })
@@ -1253,42 +1984,175 @@ assert(
 assert(state.activeWeapon == "Burst Rifle")
 assert(state.status == "Shooting range · 2 dummies · 2 visible")
 assert(observations[1].health == 150 and observations[1].maxHealth == 150)
-assert(observations[1].weapon == "Rifle")
+assert(
+    observations[1].weapon == "Riot Shield (52/100)",
+    "RIVALS ESP must publish the live Riot Shield durability label"
+)
+fighterModule._player_to_fighter[enemyPlayer].EquippedItem = targetItem
 assert(rangeObservation.player == rangeTarget)
 assert(rangeObservation.health == 150 and rangeObservation.maxHealth == 150)
 assert(
     rotationCalls == 1
-        and cameraModule.Rotation == Rivals.rotationToward(origin, targetPosition)
+        and cameraModule.Rotation == RivalsTargeting.rotationToward(origin, targetPosition)
         and nearestOptions[1].maxScreenDistance == 180,
     "Camera Aim must ignore a closer-to-crosshair target beyond the ESP distance cap"
 )
 assert(clicks == 0, "Camera Aim must not fire unless Trigger Bot is enabled")
 
-local visibleRotation = cameraModule.Rotation
-settings.silentAim = false
-settings.shotAim = true
-local cameraDataHook = hookImplementations[fighterModule.LocalFighter.GetCameraData]
-assert(cameraDataHook, "RIVALS Silent Aim must hook the natural shot camera-data seam")
-local silentCameraData, silentRay = cameraDataHook(fighterModule.LocalFighter)
-local silentRecord = silentCameraData[cameraByte0]
-local silentOrigin = Vector3.new(
-    silentRecord[cameraByte0],
-    silentRecord[cameraByte1],
-    silentRecord[cameraByte2]
-)
-local silentRotation = Rivals.rotationToward(silentOrigin, targetPosition)
+local challengerPosition = targetPosition + Vector3.new(6, 0, 0)
+local challenger = {
+    character = character(150),
+    player = enemyPlayer,
+    position = challengerPosition,
+    screenDistance = 10,
+    visible = true,
+}
+table.insert(observations, 1, challenger)
+renderCallback()
 assert(
-    silentRecord[cameraByte3] == silentRotation.X
-        and silentRecord[cameraByte4] == silentRotation.Y
-        and silentRay.Position ~= originalRay.Position,
-    "RIVALS Silent Aim must redirect only the natural shot trajectory"
+    cameraModule.Rotation == RivalsTargeting.rotationToward(origin, targetPosition),
+    "RIVALS aim must retain its current valid target instead of switching to a closer observation"
 )
+observations[2].screenDistance = settings.fov + 1
+renderCallback()
 assert(
-    cameraModule.Rotation == visibleRotation,
-    "RIVALS Silent Aim must leave the visible camera rotation unchanged"
+    cameraModule.Rotation == RivalsTargeting.rotationToward(origin, challengerPosition),
+    "RIVALS aim must acquire a new target after the locked target leaves the configured FOV"
 )
-settings.shotAim = false
-settings.silentAim = true
+table.remove(observations, 1)
+observations[1].screenDistance = 40
+renderCallback()
+
+do
+    settings.silentAim = false
+    settings.shotAim = true
+    settings.triggerBot = true
+    cameraModule.Rotation = Vector2.new(0.2, -0.4)
+    cameraHarness.camera.CFrame =
+        cameraHarness.frameForRotation(cameraModule.Rotation)
+    local visibleRotation = cameraModule.Rotation
+    local visibleFrame = cameraHarness.camera.CFrame
+    local clicksBeforePresentedTarget = clicks
+    triggerCameraCaptureEnabled = true
+    renderCallback()
+    assert(
+        clicks == clicksBeforePresentedTarget,
+        "Trigger Bot + Silent Aim must wait until the matching native camera frame is presented"
+    )
+    cameraHarness.runCameraRenderFrame()
+    currentTime += 1
+    renderCallback()
+    triggerCameraCaptureEnabled = false
+    assert(
+        clicks == clicksBeforePresentedTarget + 1
+            and triggerCameraDataAtClick ~= nil
+            and triggerRayAtClick ~= nil,
+        "Trigger Bot + Silent Aim must fire through GetCameraData after presentation is ready"
+    )
+    local triggerRecord = triggerCameraDataAtClick[cameraByte0]
+    local triggerOrigin = Vector3.new(
+        triggerRecord[cameraByte0],
+        triggerRecord[cameraByte1],
+        triggerRecord[cameraByte2]
+    )
+    local triggerRotation =
+        RivalsTargeting.rotationToward(triggerOrigin, targetPosition)
+    assert(
+        triggerRecord[cameraByte3] == triggerRotation.X
+            and triggerRecord[cameraByte4] == triggerRotation.Y
+            and triggerRayAtClick.Position ~= originalRay.Position,
+        "Trigger Bot + Silent Aim must present the matching target during synchronous GetCameraData"
+    )
+    assert(
+        cameraHarness.boundCount == 2
+            and cameraHarness.rotationDeltaCallback ~= nil,
+        "RIVALS Silent Aim must split logical and rendered camera updates around the native camera step"
+    )
+    local preCameraBindings = 0
+    local postCameraBindings = 0
+    for _, binding in pairs(cameraHarness.bound) do
+        if binding.priority == Enum.RenderPriority.Camera.Value - 1 then
+            preCameraBindings += 1
+        elseif binding.priority == Enum.RenderPriority.Camera.Value + 1 then
+            postCameraBindings += 1
+        end
+    end
+    assert(
+        preCameraBindings == 1 and postCameraBindings == 1,
+        "RIVALS Silent Aim must run at deterministic priorities around the native camera step"
+    )
+    cameraHarness.runCameraRenderFrame()
+    local cameraDataHook =
+        hookImplementations[fighterModule.LocalFighter.GetCameraData]
+    assert(
+        cameraDataHook,
+        "RIVALS Silent Aim must hook the natural shot camera-data seam"
+    )
+    local hookEnvironment = getfenv(cameraDataHook)
+    local previousProtectedCall = rawget(hookEnvironment, "pcall")
+    local nativeProtectedCall = pcall
+    hookEnvironment.pcall = function()
+        error("the live ClientFighter VM rejects protected camera-data calls")
+    end
+    local silentCameraData, silentRay =
+        cameraDataHook(fighterModule.LocalFighter)
+    hookEnvironment.pcall = previousProtectedCall or nativeProtectedCall
+    local silentRecord = silentCameraData[cameraByte0]
+    local silentOrigin = Vector3.new(
+        silentRecord[cameraByte0],
+        silentRecord[cameraByte1],
+        silentRecord[cameraByte2]
+    )
+    local silentRotation = RivalsTargeting.rotationToward(silentOrigin, targetPosition)
+    assert(
+        silentRecord[cameraByte3] == silentRotation.X
+            and silentRecord[cameraByte4] == silentRotation.Y
+            and silentRay.Position ~= originalRay.Position,
+        "RIVALS Silent Aim must return a complete natural target-bound camera snapshot"
+    )
+    assert(
+        cameraHarness.cameraDataRotationAtCall == silentRotation
+            and cameraHarness.cameraDataFrameAtCall.LookVector:Dot(
+                (
+                    targetPosition
+                    - cameraHarness.cameraDataFrameAtCall.Position
+                ).Unit
+            ) > 0.999,
+        "RIVALS Silent Aim must expose the matching native logical and rendered target state only during camera-data generation"
+    )
+    assert(
+        cameraModule.Rotation == silentRotation
+            and cameraHarness.camera.CFrame.LookVector:Dot(
+                visibleFrame.LookVector
+            ) > 0.999,
+        "RIVALS Silent Aim must retain trusted logical aim while preserving the rendered view"
+    )
+    local visibleDelta = Vector2.new(0.05, 0.1)
+    cameraModule.Rotation += visibleDelta
+    cameraHarness.rotationDeltaCallback(visibleDelta)
+    cameraHarness.runCameraRenderFrame()
+    local movedVisibleRotation = visibleRotation + visibleDelta
+    assert(
+        cameraModule.Rotation == silentRotation
+            and cameraHarness.camera.CFrame.LookVector:Dot(
+                cameraHarness.frameForRotation(movedVisibleRotation).LookVector
+            ) > 0.999,
+        "RIVALS Silent Aim must preserve native mouse movement in the masked rendered view"
+    )
+    settings.shotAim = false
+    settings.triggerBot = false
+    clicks = clicksBeforePresentedTarget
+    renderCallback()
+    cameraHarness.runCameraRenderFrame()
+    assert(
+        cameraModule.Rotation == movedVisibleRotation
+            and cameraHarness.camera.CFrame.LookVector:Dot(
+                cameraHarness.frameForRotation(movedVisibleRotation).LookVector
+            ) > 0.999,
+        "Disabling RIVALS Silent Aim must restore the latest visible camera rotation"
+    )
+    settings.silentAim = true
+end
 
 local closestRuntimePosition = origin + Vector3.new(3, 0, -4)
 local closestRuntimeTarget = {
@@ -1304,7 +2168,7 @@ cameraModule.Rotation = Vector2.zero
 local nearestCallsBeforeHumanAim = #nearestOptions
 currentTime += 1
 renderCallback(1 / 60)
-local closestRotation = Rivals.rotationToward(origin, closestRuntimePosition)
+local closestRotation = RivalsTargeting.rotationToward(origin, closestRuntimePosition)
 assert(
     #nearestOptions == nearestCallsBeforeHumanAim,
     "Human Aim must bypass cursor-distance target ranking"
@@ -1333,7 +2197,7 @@ settings.headshotRate = 100
 currentTime += 1
 renderCallback()
 assert(
-    cameraModule.Rotation == Rivals.rotationToward(origin, runtimeAimHead.Position),
+    cameraModule.Rotation == RivalsTargeting.rotationToward(origin, runtimeAimHead.Position),
     "Camera Aim must apply the configured headshot rate to its live selected target"
 )
 settings.headshotRate = 0
@@ -1342,7 +2206,7 @@ currentTime += 1
 renderCallback()
 assert(
     cameraModule.Rotation
-        == Rivals.rotationToward(origin, targetPosition + Vector3.new(3.5, 0, 0)),
+        == RivalsTargeting.rotationToward(origin, targetPosition + Vector3.new(3.5, 0, 0)),
     "Camera Aim must turn toward the intentional miss point for a configured miss"
 )
 settings.missRate = 0
@@ -1354,8 +2218,8 @@ currentTime += 1
 renderCallback(1 / 60)
 local humanHeadStart = cameraModule.Rotation
 runtimeAimHead.Position += Vector3.new(8, 0, 0)
-local movedHeadRotation = Rivals.rotationToward(origin, runtimeAimHead.Position)
-local fixedHeadFollow = Rivals.smoothRotation(humanHeadStart, movedHeadRotation, 70, 1 / 60)
+local movedHeadRotation = RivalsTargeting.rotationToward(origin, runtimeAimHead.Position)
+local fixedHeadFollow = RivalsTargeting.smoothRotation(humanHeadStart, movedHeadRotation, 70, 1 / 60)
 currentTime += 1 / 60
 renderCallback(1 / 60)
 assert(
@@ -1401,8 +2265,53 @@ assert(
     "An alive local camera subject must remain active when RIVALS reports IsSpectating during a duel"
 )
 
+activeDuel.Data.Status = "Voting"
+local votingRotationCalls = rotationCalls
+renderCallback()
+assert(
+    rotationCalls == votingRotationCalls,
+    "Map and weapon voting must suspend Camera Aim before a duel round starts"
+)
+
+activeDuel.Data.Status = "RoundStarting"
+local preRoundRotationCalls = rotationCalls
+renderCallback()
+assert(
+    rotationCalls == preRoundRotationCalls,
+    "The duel countdown must suspend Camera Aim until Status is RoundStarted"
+)
+
+activeDuel.Data.Status = "RoundStarted"
+fighterModule.LocalFighter.Data.CanPickWeapons = true
+loadoutOpen = true
+local matchLoadoutRotationCalls = rotationCalls
+renderCallback()
+assert(
+    rotationCalls == matchLoadoutRotationCalls,
+    "Generic match loadout selection must suspend Camera Aim"
+)
+
+fighterModule.LocalFighter.Data.IsInDuel = false
+fighterModule.LocalFighter.Data.IsInShootingRange = true
+local rangeLoadoutRotationCalls = rotationCalls
+renderCallback()
+assert(
+    rotationCalls == rangeLoadoutRotationCalls,
+    "Practice-range loadout selection must suspend Camera Aim"
+)
+
+loadoutOpen = false
+local rangeCombatRotationCalls = rotationCalls
+renderCallback()
+assert(
+    rotationCalls == rangeCombatRotationCalls + 1,
+    "Practice-range combat must resume after the picker closes even while weapon-pick permission remains true"
+)
+
 settings.silentAim = false
 settings.triggerBot = true
+fighterModule.LocalFighter.Data.CanPickWeapons = false
+fighterModule.LocalFighter.Data.IsInShootingRange = false
 fighterModule.LocalFighter.Data.IsInDuel = false
 target.screenDistance = 4
 observations[1].screenDistance = 4
@@ -1536,11 +2445,91 @@ renderCallback()
 assert(clicks == falloffClicks + 1, "Trigger Bot must fire the same falloff shot once it becomes lethal")
 observations[1].position = targetPosition
 
+do
+localItem.Name = "Gunblade"
+localItem.Info = gunblade.Info
+localItem.Data = {}
+localItem.GetMobileInputSettings = gunblade.GetMobileInputSettings
+localItem.CanQuickAttack = gunblade.CanQuickAttack
+fighterModule.LocalFighter.Entity.RootPart = {
+    Position = origin,
+}
+gunbladeMode = "blade"
+settings.shotAim = true
+settings.silentAim = false
+local silentGunbladeAimClicks = aimClicks
+renderCallback()
+assert(
+    aimClicks == silentGunbladeAimClicks,
+    "Gunblade Trigger Bot + Silent Aim must wait for the matching presented target"
+)
+cameraHarness.runCameraRenderFrame()
+currentTime += 1 / 60
+renderCallback()
+assert(
+    aimClicks == silentGunbladeAimClicks + 1,
+    "Gunblade Trigger Bot + Silent Aim must act only after the matching target is presented"
+)
+settings.triggerBot = false
+renderCallback()
+settings.shotAim = false
+settings.triggerBot = true
+currentTime += gunblade.Info.DashCooldown
+currentTime += 1
+local gunbladeAimClicks = aimClicks
+local gunbladeClicks = clicks
+renderCallback()
+assert(
+    aimClicks == gunbladeAimClicks + 1 and clicks == gunbladeClicks,
+    "Gunblade Trigger Bot must dispatch the Blade-mode dash through secondary input"
+)
+fighterModule.LocalFighter.Entity.RootPart.Position = targetPosition - Vector3.xAxis * 7
+currentTime += 1 / 60
+renderCallback()
+assert(
+    clicks == gunbladeClicks + 1,
+    "Gunblade Trigger Bot must slice on the first frame that the live dash enters blade reach"
+)
+gunbladeMode = "gun"
+currentTime += 1 / 60
+renderCallback()
+assert(
+    clicks == gunbladeClicks + 1,
+    "Gunblade Trigger Bot must respect the live transition cooldown before shooting"
+)
+currentTime += gunblade.Info.TransitionCooldown
+renderCallback()
+assert(
+    clicks == gunbladeClicks + 2,
+    "Gunblade Trigger Bot must fire after the live item reports its Gun-mode transition"
+)
+gunbladeMode = "blade"
+currentTime += 1 / 60
+renderCallback()
+assert(
+    aimClicks == gunbladeAimClicks + 1,
+    "Gunblade Trigger Bot must respect the dash cooldown before repeating"
+)
+currentTime += gunblade.Info.DashCooldown
+renderCallback()
+assert(
+    aimClicks == gunbladeAimClicks + 2,
+    "Gunblade Trigger Bot must repeat from Blade mode while the same target remains eligible"
+)
+fighterModule.LocalFighter.Entity.RootPart = nil
+localItem.GetMobileInputSettings = nil
+localItem.CanQuickAttack = nil
+localItem.Name = "Shorty"
+localItem.Info = table.clone(shorty.Info)
+localItem.Info.DisplayName = "Shorty"
+localItem.Data = {}
+end
+
 fighterModule.LocalFighter.Data.IsInShootingRange = false
 settings.silentAim = true
 settings.humanAim = true
 settings.aimSmoothness = 100
-cameraModule.Rotation = Rivals.rotationToward(origin, runtimeAimHead.Position)
+cameraModule.Rotation = RivalsTargeting.rotationToward(origin, runtimeAimHead.Position)
     + Vector2.new(0, math.rad(4))
 local humanShortyClicks = clicks
 for _ = 1, 3 do
@@ -1603,6 +2592,73 @@ assert(
     "Bow Trigger Bot must tap primary fire when one faster uncharged shot is lethal"
 )
 
+do
+localItem.Name = "Revolver"
+localItem.Info = table.clone(revolver.Info)
+localItem.Info.DisplayName = "Revolver"
+localItem.Data = {
+    Ammo = 6,
+}
+localItem._is_revolver_quick_shooting = nil
+localItem._reload_cancel_cooldown = 0
+localItem._reload_cancel_expiration = 0
+localItem._reload_cooldown = 0
+localItem._shoot_cooldown = 0
+localItem.IsEquipping = revolver.IsEquipping
+target.character.FindFirstChildOfClass = function(_self, className)
+    if className == "Humanoid" then
+        return {
+            Health = 30,
+            MaxHealth = 150,
+        }
+    end
+    return nil
+end
+observations[1].part = {
+    Name = "Torso",
+    Size = Vector3.new(2, 2, 1),
+}
+observations[1].position = origin + Vector3.new(0, 0, -30)
+currentTime += 1
+local revolverInputCounts = {
+    clicks = clicks,
+    aimClicks = aimClicks,
+    aimPresses = aimPresses,
+    aimReleases = aimReleases,
+}
+renderCallback()
+assert(
+    clicks == revolverInputCounts.clicks + 1
+        and aimClicks == revolverInputCounts.aimClicks
+        and aimPresses == revolverInputCounts.aimPresses
+        and aimReleases == revolverInputCounts.aimReleases,
+    "Revolver precise fire must use normal primary without invoking the quick-shot StartAiming override"
+)
+
+target.character.FindFirstChildOfClass = function(_self, className)
+    if className == "Humanoid" then
+        return {
+            Health = 100,
+            MaxHealth = 150,
+        }
+    end
+    return nil
+end
+observations[1].position = origin + Vector3.new(0, 0, -4)
+currentTime += 1
+revolverInputCounts.clicks = clicks
+revolverInputCounts.aimClicks = aimClicks
+revolverInputCounts.aimPresses = aimPresses
+renderCallback()
+assert(
+    clicks == revolverInputCounts.clicks
+        and aimClicks == revolverInputCounts.aimClicks + 1
+        and aimPresses == revolverInputCounts.aimPresses,
+    "Revolver fan fire must use the item-specific StartAiming quick-shot input"
+)
+observations[1].position = targetPosition
+end
+
 localItem.Name = "Flamethrower"
 localItem.Info = {
     DisplayName = "Flamethrower",
@@ -1655,7 +2711,7 @@ renderCallback(1 / 60)
 settings.humanAim = true
 settings.aimSmoothness = 100
 settings.triggerBot = true
-local slingshotRotation = Rivals.rotationToward(origin, runtimeAimHead.Position)
+local slingshotRotation = RivalsTargeting.rotationToward(origin, runtimeAimHead.Position)
 cameraModule.Rotation = slingshotRotation + Vector2.new(0, math.rad(20))
 local slingshotClicks = clicks
 local slingshotFrames = 0
@@ -1774,6 +2830,7 @@ assert(
     "Knife must neither turn nor trigger when its backstab cannot eliminate the target"
 )
 
+do
 localItem.Name = "Burst Rifle"
 localItem.Info = { DisplayName = "Burst Rifle" }
 settings.bhop = true
@@ -1835,7 +2892,9 @@ for _, direction in ipairs({
     movementDirection = Vector3.zero
     renderCallback()
 end
+end
 
+do
 inputCaptured = true
 settings.silentAim = true
 cameraModule.Rotation = Vector2.zero
@@ -1856,9 +2915,34 @@ assert(
         and aimClicks == capturedAimClicks,
     "The open menu must suppress automated input"
 )
+end
 
+inputCaptured = false
+settings.silentAim = false
+settings.shotAim = true
+settings.humanAim = false
+observations[1].screenDistance = 40
+observations[1].visible = true
+cameraModule.Rotation = Vector2.new(-0.1, 0.25)
+cameraHarness.camera.CFrame =
+    cameraHarness.frameForRotation(cameraModule.Rotation)
+local stopVisibleRotation = cameraModule.Rotation
+local stopVisibleFrame = cameraHarness.camera.CFrame
+renderCallback()
+cameraHarness.runCameraRenderFrame()
+assert(
+    cameraModule.Rotation ~= stopVisibleRotation,
+    "The active-stop contract requires a live logical target rotation"
+)
 adapter.stop()
 adapter.stop()
+assert(
+    cameraModule.Rotation == stopVisibleRotation
+        and cameraHarness.camera.CFrame.LookVector:Dot(
+            stopVisibleFrame.LookVector
+        ) > 0.999999,
+    "Stopping active RIVALS Silent Aim must restore the visible camera immediately"
+)
 assert(disconnected == true, "Stopping the adapter must disconnect its render loop")
 assert(trajectoryDestroyed == true, "Stopping the adapter must destroy bounce ESP drawings")
 assert(
@@ -1868,6 +2952,12 @@ assert(
 assert(
     restoredHooks[fighterModule.LocalFighter.GetCameraData] == true,
     "Stopping the adapter must restore the natural camera-data function"
+)
+assert(
+    cameraHarness.boundCount == 0
+        and cameraHarness.unboundCount == 2
+        and cameraHarness.rotationDeltaDisconnected,
+    "Stopping the adapter must remove every Silent Aim camera binding"
 )
 assert(table.find(Rivals.capabilities, "knifeMovement") == nil)
 assert(table.find(Rivals.capabilities, "bhop") ~= nil)
