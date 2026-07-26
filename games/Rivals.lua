@@ -446,57 +446,6 @@ function Rivals.rotationToward(origin, target)
     return Vector2.new(math.asin(direction.Y), math.atan2(-direction.X, -direction.Z))
 end
 
-function Rivals.redirectCameraData(cameraData, ray, targetPosition)
-    if type(cameraData) ~= "table"
-        or type(ray) ~= "table"
-        or typeof(targetPosition) ~= "Vector3"
-    then
-        return cameraData, ray
-    end
-
-    local byte0 = utf8.char(0)
-    local byte1 = utf8.char(1)
-    local byte2 = utf8.char(2)
-    local byte3 = utf8.char(3)
-    local byte4 = utf8.char(4)
-    local byte5 = utf8.char(5)
-    local redirected = table.clone(cameraData)
-    local rayOrigin
-    for _, key in ipairs({ byte0, byte1 }) do
-        local source = cameraData[key]
-        if type(source) == "table"
-            and type(source[byte0]) == "number"
-            and type(source[byte1]) == "number"
-            and type(source[byte2]) == "number"
-        then
-            local record = table.clone(source)
-            local origin = Vector3.new(
-                record[byte0],
-                record[byte1],
-                record[byte2]
-            )
-            local rotation = Rivals.rotationToward(origin, targetPosition)
-            record[byte3] = rotation.X
-            record[byte4] = rotation.Y
-            record[byte5] = 0
-            redirected[key] = record
-            rayOrigin = rayOrigin or origin
-        end
-    end
-
-    if not rayOrigin or type(ray.Distance) ~= "number" then
-        return redirected, ray
-    end
-    local rotation = Rivals.rotationToward(rayOrigin, targetPosition)
-    local direction = (
-        CFrame.Angles(0, rotation.Y, 0)
-        * CFrame.Angles(rotation.X, 0, 0)
-    ).LookVector
-    local redirectedRay = table.clone(ray)
-    redirectedRay.Position = rayOrigin + direction * ray.Distance
-    return redirected, redirectedRay
-end
-
 function Rivals.smoothRotation(current, target, smoothness, deltaTime)
     smoothness = math.clamp(smoothness or 0, 0, 100)
     if smoothness <= 0 or not current then
@@ -2020,35 +1969,34 @@ function Rivals.new(context)
         end
         cameraDataTarget = target
         cameraDataOriginal = hookFunction(target, function(self, ...)
-            local returned = table.pack(cameraDataOriginal(self, ...))
             local settings = store:Get().settings
             if stopped
                 or not settings.shotAim
                 or self ~= FighterController.LocalFighter
                 or context.isInputCaptured()
             then
-                return table.unpack(returned, 1, returned.n)
+                return cameraDataOriginal(self, ...)
             end
 
-            local cameraData = returned[1]
-            local ray = returned[2]
             local camera = Workspace.CurrentCamera
             local cameraFrame = camera
                 and (camera.GetRenderCFrame and camera:GetRenderCFrame() or camera.CFrame)
             local origin = cameraFrame and cameraFrame.Position
-            local distance = type(ray) == "table" and ray.Distance
-            if origin and type(distance) == "number" then
-                local aligned = alignCamera(true)
-                local point = silentAimPoint(aligned, origin, distance)
-                if point then
-                    returned[1], returned[2] = Rivals.redirectCameraData(
-                        cameraData,
-                        ray,
-                        point
-                    )
-                end
+            local aligned = origin and alignCamera(true)
+            local point = origin
+                and silentAimPoint(aligned, origin, RICOCHET_MAX_DISTANCE)
+            if not point then
+                return cameraDataOriginal(self, ...)
             end
-            return table.unpack(returned, 1, returned.n)
+
+            local visibleRotation = CameraController.Rotation
+            CameraController.Rotation = Rivals.rotationToward(origin, point)
+            local returned = table.pack(pcall(cameraDataOriginal, self, ...))
+            CameraController.Rotation = visibleRotation
+            if not returned[1] then
+                error(returned[2], 0)
+            end
+            return table.unpack(returned, 2, returned.n)
         end)
     end
 

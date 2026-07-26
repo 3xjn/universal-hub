@@ -370,45 +370,6 @@ local originalRay = {
     Distance = 999,
     Position = origin + Vector3.xAxis * 999,
 }
-local redirectedCameraData, redirectedRay = Rivals.redirectCameraData(
-    originalCameraData,
-    originalRay,
-    targetPosition
-)
-assert(
-    originalCameraData[cameraByte0][cameraByte3] == 0
-        and originalRay.Position == origin + Vector3.xAxis * 999,
-    "Silent Aim must clone natural shot data instead of mutating the game's returned tables"
-)
-for _, key in ipairs({ cameraByte0, cameraByte1 }) do
-    local record = redirectedCameraData[key]
-    local recordOrigin = Vector3.new(
-        record[cameraByte0],
-        record[cameraByte1],
-        record[cameraByte2]
-    )
-    local redirectedRotation = Rivals.rotationToward(recordOrigin, targetPosition)
-    assert(
-        record[cameraByte3] == redirectedRotation.X
-            and record[cameraByte4] == redirectedRotation.Y
-            and record[cameraByte5] == 0,
-        "Silent Aim must redirect both encoded camera records toward the selected trajectory"
-    )
-end
-local redirectedOrigin = Vector3.new(
-    redirectedCameraData[cameraByte0][cameraByte0],
-    redirectedCameraData[cameraByte0][cameraByte1],
-    redirectedCameraData[cameraByte0][cameraByte2]
-)
-assert(
-    redirectedRay.Distance == originalRay.Distance
-        and math.abs(
-            (redirectedRay.Position - redirectedOrigin).Magnitude
-                - originalRay.Distance
-        ) < 1e-3,
-    "Silent Aim must preserve the natural ray distance while replacing its endpoint"
-)
-
 local function corridorRaycast(rayOrigin, rayDirection)
     local bestDistance = math.huge
     local best
@@ -756,7 +717,20 @@ local fighterModule = {
             return grounded
         end,
         GetCameraData = function()
-            return originalCameraData, originalRay
+            local cameraData = table.clone(originalCameraData)
+            for _, key in ipairs({ cameraByte0, cameraByte1 }) do
+                local record = table.clone(cameraData[key])
+                record[cameraByte3] = cameraModule.Rotation.X
+                record[cameraByte4] = cameraModule.Rotation.Y
+                cameraData[key] = record
+            end
+            local direction = (
+                CFrame.Angles(0, cameraModule.Rotation.Y, 0)
+                * CFrame.Angles(cameraModule.Rotation.X, 0, 0)
+            ).LookVector
+            local ray = table.clone(originalRay)
+            ray.Position = origin + direction * ray.Distance
+            return cameraData, ray
         end,
         GetMoveVector = function()
             return originalMoveVector
