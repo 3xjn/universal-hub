@@ -8,7 +8,8 @@ function getgenv()
 end
 
 game = {}
-function game:HttpGet(url)
+function game:HttpGet(url, noCache)
+    assert(noCache == true, "Hub loader must bypass the executor HTTP cache")
     table.insert(requested, url)
 
     if url == "https://raw.githubusercontent.com/3xjn/hydroxide/dev/init.lua" then
@@ -39,5 +40,8 @@ environment.UniversalHubConfig = {
 local chunk, compileError = loadstring(source, "hub.lua")
 local result = assert(chunk, compileError)()
 assert(result == "hub-loader-ok")
-assert(#requested == 17, "Hub loader must fetch Hydroxide and its sixteen source files")
+assert(
+    #requested == 18,
+    "Hub loader must fetch Hydroxide, init.lua, and its sixteen module source files"
+)
 print("hub-loader-contracts-ok")

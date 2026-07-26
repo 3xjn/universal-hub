@@ -1,8 +1,33 @@
 local WeaponPolicy = {}
 
 local AUTOMATIC_SHOOT_COOLDOWN = 0.15
+local CROUCH_SPREAD_MULTIPLIER = 0.75
+local SNIPER_NOSCOPE_MIN_HIT_CHANCE = 0.5
 local TRIGGER_DAMAGE_RETENTION = 0.9
 local TRIGGER_INTERVAL = 0.1
+local DEFAULT_AUTOMATION_POLICY = {
+    cameraAim = true,
+    silentAim = true,
+    triggerBot = true,
+}
+local DISABLED_AUTOMATION_POLICY = {
+    cameraAim = false,
+    silentAim = false,
+    triggerBot = false,
+}
+local UTILITY_AUTOMATION_POLICIES = {
+    ["Medkit"] = DISABLED_AUTOMATION_POLICY,
+    ["Subspace Tripmine"] = DISABLED_AUTOMATION_POLICY,
+    ["Warpstone"] = DISABLED_AUTOMATION_POLICY,
+    ["Jump Pad"] = DISABLED_AUTOMATION_POLICY,
+    ["War Horn"] = DISABLED_AUTOMATION_POLICY,
+    ["Grappler"] = DISABLED_AUTOMATION_POLICY,
+    ["Flashbang"] = DISABLED_AUTOMATION_POLICY,
+    ["Grenade"] = DISABLED_AUTOMATION_POLICY,
+    ["Molotov"] = DISABLED_AUTOMATION_POLICY,
+    ["Satchel"] = DISABLED_AUTOMATION_POLICY,
+    ["Smoke Grenade"] = DISABLED_AUTOMATION_POLICY,
+}
 
 function WeaponPolicy.itemName(item)
     if not item then
@@ -14,6 +39,11 @@ function WeaponPolicy.itemName(item)
         return info.DisplayName or info.Name or info.ItemName or item.Name
     end
     return item.Name
+end
+
+function WeaponPolicy.automationPolicy(item)
+    return UTILITY_AUTOMATION_POLICIES[WeaponPolicy.itemName(item)]
+        or DEFAULT_AUTOMATION_POLICY
 end
 
 function WeaponPolicy.itemLabel(item)
@@ -36,7 +66,11 @@ function WeaponPolicy.itemLabel(item)
         return name
     end
 
-    return ("%s (%s/%s)"):format(name, tostring(current), tostring(maximum))
+    return ("%s (%s/%s)"):format(
+        name,
+        tostring(math.floor(math.max(0, current))),
+        tostring(maximum)
+    )
 end
 
 function WeaponPolicy.backstabPlan(localPosition, observation, info, acquisitionDistance)
@@ -92,6 +126,31 @@ function WeaponPolicy.backstabReady(localPosition, observation, info)
     return plan ~= nil and plan.ready == true
 end
 
+function WeaponPolicy.backstabTriggerReady(fighter, item, target)
+    local entity = fighter and fighter.Entity
+    local localRoot = entity and entity.RootPart
+    local isGrounded = fighter and fighter.IsGrounded
+    local grounded
+    if type(isGrounded) == "function" then
+        local succeeded, value = pcall(isGrounded, fighter)
+        grounded = succeeded and value == true
+    elseif type(isGrounded) == "boolean" then
+        grounded = isGrounded
+    end
+    if not localRoot
+        or typeof(localRoot.Position) ~= "Vector3"
+        or grounded ~= true
+        or type(item) ~= "table"
+        or type(item.Info) ~= "table"
+        or not target
+        or target.aimSettled ~= true
+    then
+        return false
+    end
+
+    return WeaponPolicy.backstabReady(localRoot.Position, target, item.Info)
+end
+
 function WeaponPolicy.adsSettled(cameraController, item)
     local info = item and item.Info
     local data = item and item.Data
@@ -106,6 +165,49 @@ function WeaponPolicy.adsSettled(cameraController, item)
         and type(spring.Value) == "number"
         and type(spring.Target) == "number"
         and math.abs(spring.Value - spring.Target) <= 0.5
+end
+
+function WeaponPolicy.sniperTriggerReady(cameraController, item, observation, distance, crouching)
+    if WeaponPolicy.itemName(item) ~= "Sniper" then
+        return true
+    end
+
+    local info = item and item.Info
+    local data = item and item.Data
+    if type(info) ~= "table" or type(data) ~= "table" then
+        return false
+    end
+    if data.IsAiming == true then
+        if type(item.IsFullyAiming) == "function" then
+            local succeeded, fullyAiming = pcall(item.IsFullyAiming, item)
+            if succeeded then
+                return fullyAiming == true
+            end
+        end
+        return WeaponPolicy.adsSettled(cameraController, item)
+    end
+
+    local part = observation and observation.part
+    local size = part and part.Size
+    local spread = info.ShootSpread
+    if type(distance) ~= "number"
+        or distance <= 0
+        or typeof(size) ~= "Vector3"
+        or type(spread) ~= "number"
+        or spread <= 0
+    then
+        return false
+    end
+
+    local targetRadius = math.min(size.X, size.Y) * 0.5
+    if targetRadius <= 0 then
+        return false
+    end
+
+    local maximumSpread = math.rad(spread)
+        * (crouching and CROUCH_SPREAD_MULTIPLIER or 1)
+    local targetAngularRadius = math.atan(targetRadius / distance)
+    return targetAngularRadius / maximumSpread >= SNIPER_NOSCOPE_MIN_HIT_CHANCE
 end
 
 function WeaponPolicy.holdToFire(item)
@@ -311,6 +413,10 @@ function WeaponPolicy.damageAtDistance(item, observation, distance)
 end
 
 function WeaponPolicy.triggerDamageReady(item, observation, distance)
+    if WeaponPolicy.itemName(item) == "Burst Rifle" then
+        return true
+    end
+
     local info = item and item.Info
     local startDistance =
         info and (info.DamageFallOffStartDist or info.RaycastDamageDropoffStartDistance)

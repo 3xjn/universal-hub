@@ -43,6 +43,7 @@ local LocalPlayer = Players.LocalPlayer
 local Store = import("modules/Store")
 local Config = import("modules/Config")
 local InputCapture = import("modules/InputCapture")
+local MenuToggle = import("modules/MenuToggle")
 local Registry = import("modules/Registry")
 local Session = import("modules/Session")
 local Overlay = import("modules/Overlay")
@@ -350,8 +351,8 @@ session.game = adapterDefinition.label
 session.registry = registry
 session.state = store:Get()
 session.store = store
-local menuToggleConnection = UserInputService.InputBegan:Connect(function(input)
-    if input.KeyCode == Enum.KeyCode.RightShift then
+local menuToggleConnection = UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    if MenuToggle.shouldToggle(input, gameProcessedEvent, UserInputService) then
         session:toggleMenu()
     end
 end)

@@ -38,6 +38,7 @@ local Rivals = {
 local TRIGGER_INTERVAL = 0.1
 local TRIGGER_RADIUS = 8
 local MAX_OBSERVATION_DISTANCE = 2000
+local PRACTICE_DUMMY_HEALTH = 150
 local RICOCHET_CACHE_INTERVAL = 0.15
 local SPLASH_CACHE_INTERVAL = 0.1
 local SLINGSHOT_CACHE_INTERVAL = 0.2
@@ -270,6 +271,19 @@ function Rivals.new(context)
         )
     end
 
+    local function localFighterIsCrouching(fighter)
+        local isCrouching = fighter and fighter.IsCrouching
+        if type(isCrouching) == "function" then
+            local succeeded, crouching = pcall(isCrouching, fighter)
+            if succeeded then
+                return crouching == true
+            end
+        end
+        local data = fighter and fighter.Data
+        return type(data) == "table" and data.IsCrouching == true
+    end
+
+    local suppressBhopJump = false
     local movement = Movement.new({
         controlsController = ControlsController,
         getFighter = function()
@@ -283,6 +297,9 @@ function Rivals.new(context)
         isInputCaptured = context.isInputCaptured,
         mechanicsController = MechanicsController,
         movementDirection = context.movementDirection,
+        shouldSuppressJump = function()
+            return suppressBhopJump
+        end,
         spawn = spawn,
         userInputService = UserInputService,
     })
@@ -469,12 +486,13 @@ function Rivals.new(context)
     local function plannedAimTarget(target, item)
         local now = clock()
         local settings = store:Get().settings
-        local options = ((settings.headshotRate or 0) > 0 or settings.humanAim)
-            and headAimOptions()
-            or nil
+        local options = headAimOptions()
         if aimPlan
             and aimPlan.character == target.character
+            and aimPlan.headshotRate == settings.headshotRate
+            and aimPlan.humanAim == settings.humanAim
             and aimPlan.item == item
+            and aimPlan.missRate == settings.missRate
             and now < aimPlan.expiresAt
         then
             local refreshed = table.clone(target)
@@ -494,6 +512,18 @@ function Rivals.new(context)
                 end
             elseif refreshed.preferHead then
                 updatePreferredHead(target, refreshed, options)
+            else
+                local bodyPosition, bodyPart = Targeting.visibleBodyPoint(
+                    target,
+                    options and options.origin,
+                    options and options.raycast
+                )
+                if bodyPosition and bodyPart then
+                    refreshed.part = bodyPart
+                    refreshed.position = bodyPosition
+                elseif refreshed.part and refreshed.part.Position then
+                    refreshed.position = refreshed.part.Position
+                end
             end
             return refreshed
         end
@@ -503,17 +533,13 @@ function Rivals.new(context)
                 and (info.ShootCooldown or info.AttackCooldown or info.ChargeReleaseCooldown)
             or TRIGGER_INTERVAL
         local planned = Targeting.applyAimRates(target, settings, random, options)
-        if settings.humanAim
-            and planned
-            and not planned.intentionalMiss
-            and not planned.preferHead
-        then
-            planned = updatePreferredHead(target, table.clone(planned), options)
-        end
         aimPlan = {
             character = target.character,
             expiresAt = now + math.max(TRIGGER_INTERVAL, cooldown or TRIGGER_INTERVAL),
+            headshotRate = settings.headshotRate,
+            humanAim = settings.humanAim,
             item = item,
+            missRate = settings.missRate,
             target = planned,
         }
         return planned
@@ -579,8 +605,8 @@ function Rivals.new(context)
                         local health = humanoid.Health
                         local maxHealth = humanoid.MaxHealth
                         if health == math.huge or maxHealth == math.huge then
-                            health = 1
-                            maxHealth = 1
+                            health = PRACTICE_DUMMY_HEALTH
+                            maxHealth = PRACTICE_DUMMY_HEALTH
                         end
                         observation.player = entity
                         observation.health = health
@@ -714,6 +740,14 @@ function Rivals.new(context)
 
         local fighter = FighterController.LocalFighter
         local item = fighter and fighter.EquippedItem
+        local automationPolicy = WeaponPolicy.automationPolicy(item)
+        local aimMode = shotOnly and "silentAim" or "cameraAim"
+        if automationPolicy[aimMode] ~= true then
+            aimTargetKey = nil
+            aimTargetWeapon = nil
+            aimPlan = nil
+            return nil
+        end
         local weaponName = WeaponPolicy.itemName(item)
         local energyRifle = weaponName == "Energy Rifle"
         local knife = weaponName == "Knife"
@@ -810,12 +844,23 @@ function Rivals.new(context)
         end
 
         if splashProjectile and target.position then
+            local raycast = environmentRaycast()
             local cacheValid = splashCache
                 and splashCache.target == target.character
                 and splashCache.item == item
                 and now < splashCache.expiresAt
                 and (splashCache.origin - origin).Magnitude <= 0.5
                 and (splashCache.targetPosition - target.position).Magnitude <= 0.5
+                and (
+                    not splashCache.solution
+                    or ProjectileAim.isSplashSolutionCurrent(
+                        origin,
+                        splashCache.solution,
+                        item.Info,
+                        raycast,
+                        Workspace.Gravity
+                    )
+                )
             if not cacheValid then
                 splashCache = {
                     expiresAt = now + SPLASH_CACHE_INTERVAL,
@@ -825,7 +870,7 @@ function Rivals.new(context)
                         origin,
                         target,
                         item.Info,
-                        environmentRaycast(),
+                        raycast,
                         Workspace.Gravity
                     ),
                     target = target.character,
@@ -860,7 +905,8 @@ function Rivals.new(context)
                 origin,
                 target,
                 item.Info,
-                Workspace.Gravity
+                Workspace.Gravity,
+                shotOnly and renderDelta or 0
             )
             if solution then
                 local aimSettled = settleAim(
@@ -993,6 +1039,17 @@ function Rivals.new(context)
         end
         local fighter = FighterController.LocalFighter
         local item = fighter and fighter.EquippedItem
+        if WeaponPolicy.automationPolicy(item).triggerBot ~= true then
+            gunbladeComboState = nil
+            aimPlan = nil
+            releaseFire()
+            if triggerHeld then
+                context.aimRelease()
+                triggerHeld = false
+                triggerHeldItem = nil
+            end
+            return
+        end
         local gunblade = WeaponPolicy.itemName(item) == "Gunblade"
         if not gunblade and alignedTarget and alignedTarget.aimSettled == false then
             local humanReticleReady = settings.humanAim
@@ -1115,7 +1172,7 @@ function Rivals.new(context)
         end
         if WeaponPolicy.itemName(item) == "Knife" then
             releaseFire()
-            if not (alignedTarget and alignedTarget.backstab) then
+            if not WeaponPolicy.backstabTriggerReady(fighter, item, alignedTarget) then
                 return
             end
             if triggerHeld then
@@ -1137,6 +1194,18 @@ function Rivals.new(context)
             and target.position
             and (target.position - cameraFrame.Position).Magnitude
         if targetDistance and not WeaponPolicy.triggerDamageReady(item, target, targetDistance) then
+            releaseFire()
+            return
+        end
+        local sniperCrouching = WeaponPolicy.itemName(item) == "Sniper"
+            and localFighterIsCrouching(fighter)
+        if not WeaponPolicy.sniperTriggerReady(
+            CameraController,
+            item,
+            target,
+            targetDistance,
+            sniperCrouching
+        ) then
             releaseFire()
             return
         end
@@ -1279,6 +1348,9 @@ function Rivals.new(context)
         else
             shotPresentation:clear()
         end
+        suppressBhopJump = WeaponPolicy.itemName(fighter and fighter.EquippedItem) == "Knife"
+            and alignedTarget ~= nil
+            and alignedTarget.knifePath ~= nil
         movement:update()
         local trajectory = alignedTarget
             and ((alignedTarget.ricochet and alignedTarget.ricochet.path)

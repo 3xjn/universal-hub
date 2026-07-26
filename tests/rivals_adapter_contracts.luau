@@ -264,7 +264,11 @@ assert(
     centerAim.position == aimHead.Position and centerAim.part == aimHead,
     "Head aim must preserve the normal center point when critical geometry is visible"
 )
-local blockedHeadAim = RivalsTargeting.applyAimRates(baseAimObservation, {
+local blockedHeadAim = RivalsTargeting.applyAimRates({
+    character = aimCharacter,
+    part = aimHead,
+    position = aimHead.Position,
+}, {
     headshotRate = 100,
     missRate = 0,
 }, function()
@@ -276,9 +280,19 @@ end, {
     end,
 })
 assert(
-    blockedHeadAim.position == baseAimObservation.position
-        and blockedHeadAim.part == baseAimObservation.part,
-    "Head aim must keep the visible body point when no bounded head candidate is exposed"
+    blockedHeadAim.position == aimRoot.Position and blockedHeadAim.part == aimRoot,
+    "Head aim must fall back to a visible body point when no bounded head candidate is exposed"
+)
+local obscuredBodyPosition, obscuredBodyPart = RivalsTargeting.visibleBodyPoint({
+    character = aimCharacter,
+    part = aimHead,
+    position = aimHead.Position,
+}, lowCameraOrigin, function()
+    return { Instance = criticalHeadHitbox }
+end)
+assert(
+    obscuredBodyPosition == nil and obscuredBodyPart == nil,
+    "Body aim must not treat a first-hit Head or critical hitbox as a visible body candidate"
 )
 end
 local missedAim = RivalsTargeting.applyAimRates(baseAimObservation, {
@@ -294,18 +308,85 @@ assert(
     "Miss rate must take priority and produce a stable point outside the target body"
 )
 assert(
-    RivalsTargeting.applyAimRates(baseAimObservation, {
+    RivalsTargeting.applyAimRates({
+        character = aimCharacter,
+        part = aimHead,
+        position = aimHead.Position,
+    }, {
         headshotRate = 0,
         missRate = 0,
     }, function()
         error("Zero rates must not consume random samples")
-    end) == baseAimObservation,
-    "Zero accuracy rates must preserve existing targeting behavior"
+    end, {
+        origin = Vector3.new(0, 0, 8),
+        raycast = function()
+            return { Instance = aimRoot }
+        end,
+    }).part == aimRoot,
+    "A 0% headshot rate must not inherit Hydroxide's raw Head observation when a visible body candidate exists"
+)
+assert(
+    RivalsTargeting.applyAimRates({
+        character = aimCharacter,
+        part = aimHead,
+        position = aimHead.Position,
+    }, {
+        headshotRate = 50,
+        missRate = 0,
+    }, function()
+        return 0.49
+    end).part == aimHead,
+    "A 50% headshot rate must choose Head below its deterministic probability threshold"
+)
+assert(
+    RivalsTargeting.applyAimRates({
+        character = aimCharacter,
+        part = aimHead,
+        position = aimHead.Position,
+    }, {
+        headshotRate = 50,
+        missRate = 0,
+    }, function()
+        return 0.5
+    end, {
+        origin = Vector3.new(0, 0, 8),
+        raycast = function()
+            return { Instance = aimRoot }
+        end,
+    }).part == aimRoot,
+    "A 50% headshot rate must choose a visible body candidate at or above its deterministic probability threshold"
 )
 
 assert(RivalsWeaponPolicy.itemName({ Info = { DisplayName = "Energy Rifle" }, Name = "Internal" }) == "Energy Rifle")
 assert(RivalsWeaponPolicy.itemName({ Info = { Name = "Handgun" } }) == "Handgun")
 assert(RivalsWeaponPolicy.itemName(nil) == nil)
+for _, utilityName in ipairs({
+    "Medkit",
+    "Subspace Tripmine",
+    "Warpstone",
+    "Jump Pad",
+    "War Horn",
+    "Grappler",
+    "Flashbang",
+    "Grenade",
+    "Molotov",
+    "Satchel",
+    "Smoke Grenade",
+}) do
+    local policy = RivalsWeaponPolicy.automationPolicy({
+        Info = { DisplayName = utilityName },
+    })
+    assert(
+        policy.cameraAim == false and policy.silentAim == false and policy.triggerBot == false,
+        ("%s must opt out of Camera Aim, Silent Aim, and Trigger Bot"):format(utilityName)
+    )
+end
+assert(
+    RivalsWeaponPolicy.automationPolicy({
+        Info = { DisplayName = "Burst Rifle" },
+    }).cameraAim == true,
+    "Ordinary weapons must preserve existing automation behavior"
+)
 do
 local riotShield = {
     Info = {
@@ -314,12 +395,12 @@ local riotShield = {
     },
     Get = function(_self, field)
         assert(field == "Ammo", "Shield labels must read the live replicated Ammo field")
-        return 52
+        return 52.75
     end,
 }
 assert(
     RivalsWeaponPolicy.itemLabel(riotShield) == "Riot Shield (52/100)",
-    "Riot Shield weapon text must show current/max durability from Ammo and MaxAbsorption"
+    "Riot Shield weapon text must truncate fractional Ammo in its current/max durability label"
 )
 assert(
     RivalsWeaponPolicy.itemLabel({
@@ -354,6 +435,66 @@ scopeCamera._fov_weapons_spring.Value = -49.75
 assert(RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == true)
 scopedItem.Data.IsAiming = false
 assert(RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == true)
+
+do
+local sniper = {
+    Info = {
+        AimScopePercent = 0.5,
+        DisplayName = "Sniper",
+        ShootSpread = 15,
+    },
+    Data = {
+        IsAiming = false,
+    },
+}
+local sniperTarget = {
+    part = {
+        Name = "Torso",
+        Size = Vector3.new(2, 2, 1),
+    },
+}
+assert(
+    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 30, false) == false,
+    "Sniper Trigger Bot must wait for a far unscoped target outside the 50% radial hit cutoff"
+)
+assert(
+    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 6, false) == true,
+    "Sniper Trigger Bot must allow a close unscoped target inside the 50% radial hit cutoff"
+)
+assert(
+    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 9, false) == false,
+    "Sniper Trigger Bot must keep the standing no-scope cone conservative"
+)
+assert(
+    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 9, true) == true,
+    "Sniper Trigger Bot must use the native crouching spread reduction"
+)
+sniper.Data.IsAiming = true
+sniper.fullyAiming = false
+sniper.IsFullyAiming = function(self)
+    return self.fullyAiming
+end
+scopeCamera._fov_weapons_spring.Value = -49.75
+assert(
+    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 30, false) == false,
+    "Sniper Trigger Bot must wait until the native item reports full ADS"
+)
+sniper.fullyAiming = true
+assert(
+    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 30, false) == true,
+    "Sniper Trigger Bot must allow a spread-free shot after native ADS settles"
+)
+assert(
+    RivalsWeaponPolicy.sniperTriggerReady(
+        scopeCamera,
+        { Data = { IsAiming = false }, Info = { DisplayName = "Sniper", ShootSpread = 15 } },
+        { part = {} },
+        6,
+        false
+    ) == false,
+    "Sniper Trigger Bot must fail closed when the selected hit area cannot be measured"
+)
+end
 
 assert(
     RivalsWeaponPolicy.holdToFire({
@@ -555,6 +696,17 @@ assert(math.abs(RivalsWeaponPolicy.damageAtDistance(shorty, { part = { Name = "T
 assert(
     RivalsWeaponPolicy.triggerDamageReady(shorty, { health = 150, part = { Name = "Torso" } }, 20) == false,
     "Trigger Bot must wait instead of wasting a severe-falloff body shot"
+)
+assert(
+    RivalsWeaponPolicy.triggerDamageReady(
+        {
+            Name = "Burst Rifle",
+            Info = table.clone(shorty.Info),
+        },
+        { health = 150, part = { Name = "Torso" } },
+        20
+    ) == true,
+    "Burst Rifle Trigger Bot must keep taking accurate ranged bursts through damage falloff"
 )
 assert(
     RivalsWeaponPolicy.triggerDamageReady(shorty, { health = 40, part = { Name = "Torso" } }, 20) == true,
@@ -913,33 +1065,115 @@ assert(
     unsafeEarlyImpact == nil,
     "RPG prediction must reject an early path collision outside the target's blast radius at actual impact time"
 )
+do
+local function solidWallRaycast(rayOrigin, rayDirection)
+    local nearestScale = math.huge
+    local nearestNormal
+    for _, surface in ipairs({
+        { axis = "X", normal = -Vector3.xAxis, position = 8 },
+        { axis = "X", normal = Vector3.xAxis, position = 8.5 },
+        { axis = "Y", normal = Vector3.yAxis, position = 0 },
+    }) do
+        local originCoordinate = surface.axis == "X" and rayOrigin.X or rayOrigin.Y
+        local directionCoordinate = surface.axis == "X" and rayDirection.X or rayDirection.Y
+        if math.abs(directionCoordinate) > 1e-6 then
+            local scale = (surface.position - originCoordinate) / directionCoordinate
+            if scale > 1e-5 and scale <= 1 and scale < nearestScale then
+                nearestScale = scale
+                nearestNormal = surface.normal
+            end
+        end
+    end
+    if nearestNormal then
+        return {
+            Normal = nearestNormal,
+            Position = rayOrigin + rayDirection * nearestScale,
+        }
+    end
+    return nil
+end
+local wallOccludedSplash = RivalsProjectileAim.solveSplashAim(
+    Vector3.new(0, 3, 0),
+    {
+        part = {
+            AssemblyLinearVelocity = Vector3.zero,
+        },
+        position = Vector3.new(10, 3, 0),
+    },
+    {
+        ProjectileGravity = 0,
+        ProjectileLifetime = 5,
+        ProjectileSpeed = 100,
+        ShootExplosionRadius = 16,
+    },
+    solidWallRaycast,
+    196.2
+)
+assert(
+    wallOccludedSplash == nil,
+    "RPG prediction must reject a blast-radius impact when a solid wall blocks the impact from the target"
+)
+end
 assert(
     latencySplashAim
         and latencySplashAim.predictedPosition.X > splashAim.predictedPosition.X + 0.4,
     "RPG prediction must add observed network latency to moving-target lead"
 )
+do
+local daggerInfo = {
+    ProjectileGravity = 0.25,
+    ProjectileLifetime = 5,
+    ProjectileSpawnOffset = CFrame.new(0, -1, -2)
+        * CFrame.Angles(math.rad(4), 0, 0),
+    ProjectileSpeed = 300,
+}
+local daggerOrigin = Vector3.new(0, 3, 0)
 local daggerAim = RivalsProjectileAim.solveProjectileAim(
-    Vector3.new(0, 3, 0),
+    daggerOrigin,
     {
         part = {
             AssemblyLinearVelocity = Vector3.new(0, 0, 12),
         },
         position = Vector3.new(60, 3, 0),
     },
-    {
-        ProjectileGravity = 0.25,
-        ProjectileLifetime = 5,
-        ProjectileSpeed = 300,
-    },
+    daggerInfo,
     196.2
 )
+local daggerReference = math.abs(daggerAim.direction:Dot(Vector3.yAxis)) < 0.999
+        and Vector3.yAxis
+    or Vector3.xAxis
+local daggerRight = daggerAim.direction:Cross(daggerReference).Unit
+local daggerUp = daggerRight:Cross(daggerAim.direction).Unit
+local daggerLaunchFrame = CFrame.fromMatrix(
+    daggerOrigin,
+    daggerRight,
+    daggerUp,
+    -daggerAim.direction
+) * daggerInfo.ProjectileSpawnOffset
+local daggerImpact = daggerLaunchFrame.Position
+    + daggerLaunchFrame.LookVector
+        * (daggerInfo.ProjectileSpeed * daggerAim.flightTime)
+    + Vector3.new(0, -196.2 * daggerInfo.ProjectileGravity, 0)
+        * (0.5 * daggerAim.flightTime * daggerAim.flightTime)
+local daggerSpawnCompensation = math.deg(math.acos(math.clamp(
+    daggerAim.direction:Dot(daggerAim.projectileDirection),
+    -1,
+    1
+)))
 assert(
     daggerAim
         and daggerAim.predictedPosition.Z > 0
-        and daggerAim.direction.Y > 0
-        and daggerAim.flightTime > 0,
-    "Dagger aiming must lead target movement and compensate for its measured projectile gravity"
+        and daggerAim.projectileDirection.Y > 0
+        and daggerAim.flightTime > 0
+        and daggerSpawnCompensation > 3
+        and daggerLaunchFrame.LookVector:Dot(daggerAim.projectileDirection) > 0.99999
+        and (daggerImpact - daggerAim.predictedPosition).Magnitude < 0.05,
+    ("Dagger aiming must compensate for its rotated native projectile spawn frame (error %.4f, compensation %.4f)"):format(
+        (daggerImpact - daggerAim.predictedPosition).Magnitude,
+        daggerSpawnCompensation
+    )
 )
+end
 do
 local bowCameraOrigin = Vector3.new(0, 5, 0)
 local bowInfo = {
@@ -959,9 +1193,16 @@ local bowAim = RivalsProjectileAim.solveProjectileAim(
     bowInfo,
     196.2
 )
-local bowLaunchFrame = CFrame.lookAt(
+local bowReference = math.abs(bowAim.direction:Dot(Vector3.yAxis)) < 0.999
+        and Vector3.yAxis
+    or Vector3.xAxis
+local bowRight = bowAim.direction:Cross(bowReference).Unit
+local bowUp = bowRight:Cross(bowAim.direction).Unit
+local bowLaunchFrame = CFrame.fromMatrix(
     bowCameraOrigin,
-    bowCameraOrigin + bowAim.direction
+    bowRight,
+    bowUp,
+    -bowAim.direction
 )
 local expectedBowLaunchOrigin =
     (bowLaunchFrame * bowInfo.ProjectileSpawnOffset).Position
@@ -974,6 +1215,32 @@ assert(
         and (bowAim.launchOrigin - bowCameraOrigin).Magnitude > 1
         and (bowImpact - bowAim.predictedPosition).Magnitude < 0.05,
     "Bow prediction must solve from its native camera-space projectile spawn offset"
+)
+local bowPresentationDelay = 1 / 60
+local bowDelayedVelocity = Vector3.new(0, 0, 30)
+local bowDelayedTarget = Vector3.new(120, 5, 0)
+local bowDelayedAim = RivalsProjectileAim.solveProjectileAim(
+    bowCameraOrigin,
+    {
+        part = {
+            AssemblyLinearVelocity = bowDelayedVelocity,
+        },
+        position = bowDelayedTarget,
+    },
+    bowInfo,
+    196.2,
+    bowPresentationDelay
+)
+local bowDelayedImpact = bowDelayedAim.launchOrigin
+    + bowDelayedAim.projectileDirection
+        * (bowInfo.ProjectileSpeed * bowDelayedAim.flightTime)
+    + Vector3.new(0, -196.2 * bowInfo.ProjectileGravity, 0)
+        * (0.5 * bowDelayedAim.flightTime * bowDelayedAim.flightTime)
+local bowDelayedExpected = bowDelayedTarget
+    + bowDelayedVelocity * (bowPresentationDelay + bowDelayedAim.flightTime)
+assert(
+    (bowDelayedImpact - bowDelayedExpected).Magnitude < 0.05,
+    "Bow prediction must include the Silent Aim presentation frame before projectile flight"
 )
 end
 
@@ -1084,6 +1351,55 @@ assert(
     RivalsWeaponPolicy.backstabReady(Vector3.new(-2.1, 0, 0), knifeObservation, knifeInfo) == false,
     "Knife backstab readiness must reject targets beyond heavy-attack reach"
 )
+knifeObservation.fighter = {
+    Entity = {
+        RootPart = {
+            Position = Vector3.new(0, 0, 0),
+        },
+    },
+    IsGrounded = function(self)
+        return self._grounded
+    end,
+    _grounded = false,
+}
+knifeObservation.item = { Info = knifeInfo }
+knifeObservation.aimSettled = true
+assert(
+    RivalsWeaponPolicy.backstabTriggerReady(
+        knifeObservation.fighter,
+        knifeObservation.item,
+        knifeObservation
+    ) == false,
+    "Knife Trigger Bot must reject a stale rear window while the fighter is airborne"
+)
+knifeObservation.fighter._grounded = true
+knifeObservation.fighter.Entity.RootPart.Position = Vector3.new(0, 8, 0)
+assert(
+    RivalsWeaponPolicy.backstabTriggerReady(
+        knifeObservation.fighter,
+        knifeObservation.item,
+        knifeObservation
+    ) == false,
+    "Knife Trigger Bot must revalidate current vertical reach instead of trusting aligned geometry"
+)
+knifeObservation.fighter.Entity.RootPart.Position = Vector3.new(10, 0, 0)
+assert(
+    RivalsWeaponPolicy.backstabTriggerReady(
+        knifeObservation.fighter,
+        knifeObservation.item,
+        knifeObservation
+    ) == false,
+    "Knife Trigger Bot must revalidate current reach and rear geometry"
+)
+knifeObservation.fighter.Entity.RootPart.Position = Vector3.new(0, 0, 0)
+assert(
+    RivalsWeaponPolicy.backstabTriggerReady(
+        knifeObservation.fighter,
+        knifeObservation.item,
+        knifeObservation
+    ) == true,
+    "Knife Trigger Bot must permit current grounded lethal rear geometry"
+)
 
 local slingshotAim = RivalsProjectileAim.solveSlingshot(
     Vector3.new(0, 5, 0),
@@ -1161,6 +1477,7 @@ local targetShield = {
     end,
 }
 local localItem = { Name = "Burst Rifle", Info = { DisplayName = "Burst Rifle" } }
+local crouching = false
 local sliding = false
 local grounded = true
 local canSlide = true
@@ -1181,6 +1498,9 @@ local fighterModule = {
         EquippedItem = localItem,
         CanSlide = function()
             return canSlide
+        end,
+        IsCrouching = function()
+            return crouching
         end,
         IsSliding = function()
             return sliding
@@ -1636,8 +1956,8 @@ local rangeTarget = {
     FindFirstChildOfClass = function(_self, className)
         if className == "Humanoid" then
             return {
-                Health = 150,
-                MaxHealth = 150,
+                Health = math.huge,
+                MaxHealth = math.huge,
             }
         end
         return nil
@@ -2201,17 +2521,56 @@ assert(
     "Camera Aim must apply the configured headshot rate to its live selected target"
 )
 settings.headshotRate = 0
+currentTime += 0.01
+renderCallback()
+assert(
+    cameraModule.Rotation == RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position),
+    "Camera Aim must invalidate a cached head plan immediately when Headshot Rate changes"
+)
+runtimeAimRoot.Position += Vector3.new(4, 0, 0)
+currentTime += 0.01
+renderCallback()
+assert(
+    cameraModule.Rotation == RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position),
+    "Camera Aim must refresh the selected body point instead of reusing the fresh raw Head position during a cached body plan"
+)
+runtimeAimRoot.Position = targetPosition
 settings.missRate = 100
-currentTime += 1
+currentTime += 0.01
 renderCallback()
 assert(
     cameraModule.Rotation
         == RivalsTargeting.rotationToward(origin, targetPosition + Vector3.new(3.5, 0, 0)),
-    "Camera Aim must turn toward the intentional miss point for a configured miss"
+    "Camera Aim must invalidate a cached body plan immediately when Miss Rate changes"
 )
 settings.missRate = 0
+settings.humanAim = true
+cameraModule.Rotation = Vector2.zero
+for _ = 1, 24 do
+    currentTime += 1 / 60
+    renderCallback(1 / 60)
+end
+assert(
+    (cameraModule.Rotation - RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position)).Magnitude
+        < (cameraModule.Rotation - RivalsTargeting.rotationToward(origin, runtimeAimHead.Position)).Magnitude,
+    "Human Aim with a 0% Headshot Rate must converge on the visible body candidate"
+)
+settings.headshotRate = 100
+cameraModule.Rotation = Vector2.zero
+for _ = 1, 24 do
+    currentTime += 1 / 60
+    renderCallback(1 / 60)
+end
+assert(
+    (cameraModule.Rotation - RivalsTargeting.rotationToward(origin, runtimeAimHead.Position)).Magnitude
+        < (cameraModule.Rotation - RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position)).Magnitude,
+    "Human Aim with a 100% Headshot Rate must converge on Head"
+)
+settings.humanAim = false
+settings.headshotRate = 0
 
 settings.humanAim = true
+settings.headshotRate = 100
 settings.aimSmoothness = 70
 cameraModule.Rotation = Vector2.zero
 currentTime += 1
@@ -2229,6 +2588,7 @@ assert(
 )
 assert(cameraModule.Rotation ~= movedHeadRotation, "Human Aim must stay imperfect instead of hard-locking the head")
 settings.humanAim = false
+settings.headshotRate = 0
 runtimeAimHead.Position = targetPosition + Vector3.new(0, 2, 0)
 
 local clicksBeforeSmoothAim = clicks
@@ -2339,6 +2699,68 @@ rangeObservation.screenDistance = 4
 renderCallback()
 assert(clicks == 1, "Trigger Bot must use normal input only when a visible enemy crosses the reticle")
 
+for _, utilityName in ipairs({
+    "Medkit",
+    "Subspace Tripmine",
+    "Warpstone",
+    "Jump Pad",
+    "War Horn",
+    "Grappler",
+    "Flashbang",
+    "Grenade",
+    "Molotov",
+    "Satchel",
+    "Smoke Grenade",
+}) do
+    localItem.Name = utilityName
+    localItem.Info = { DisplayName = utilityName }
+    localItem.Data = {}
+    settings.silentAim = true
+    settings.shotAim = false
+    currentTime += 1
+    local cameraAimInputs = {
+        aimClicks = aimClicks,
+        aimPresses = aimPresses,
+        aimReleases = aimReleases,
+        clicks = clicks,
+        presses = presses,
+        releases = releases,
+        rotations = rotationCalls,
+    }
+    renderCallback()
+    assert(
+        rotationCalls == cameraAimInputs.rotations
+            and clicks == cameraAimInputs.clicks
+            and presses == cameraAimInputs.presses
+            and releases == cameraAimInputs.releases
+            and aimClicks == cameraAimInputs.aimClicks
+            and aimPresses == cameraAimInputs.aimPresses
+            and aimReleases == cameraAimInputs.aimReleases,
+        ("%s must not select a Camera Aim target or dispatch Trigger Bot input"):format(utilityName)
+    )
+
+    settings.silentAim = false
+    settings.shotAim = true
+    currentTime += 1
+    renderCallback()
+    cameraHarness.runCameraRenderFrame()
+    assert(
+        rotationCalls == cameraAimInputs.rotations
+            and clicks == cameraAimInputs.clicks
+            and presses == cameraAimInputs.presses
+            and releases == cameraAimInputs.releases
+            and aimClicks == cameraAimInputs.aimClicks
+            and aimPresses == cameraAimInputs.aimPresses
+            and aimReleases == cameraAimInputs.aimReleases,
+        ("%s must not publish a Silent Aim target or dispatch Trigger Bot input"):format(utilityName)
+    )
+end
+localItem.Name = "Burst Rifle"
+localItem.Info = { DisplayName = "Burst Rifle" }
+localItem.Data = {}
+settings.silentAim = false
+settings.shotAim = false
+
 fighterModule._player_to_fighter[enemyPlayer].EquippedItem = {
     Name = "Katana",
     Data = { FOVOffset = 5 },
@@ -2402,6 +2824,19 @@ assert(
     "Splash Camera Aim and Trigger Bot must use a verified environment impact"
 )
 
+do
+environmentCast = function()
+    return nil
+end
+local staleSplashClicks = clicks
+local staleSplashRotations = rotationCalls
+renderCallback()
+assert(
+    rotationCalls == staleSplashRotations and clicks == staleSplashClicks,
+    "Splash Camera Aim and Trigger Bot must discard a cached impact when its environment geometry changes"
+)
+end
+
 clicks = unsafeSplashClicks
 environmentCast = function()
     return nil
@@ -2418,6 +2853,94 @@ assert(clicks == 1, "Trigger Bot must wait while a scoped weapon is still enteri
 cameraModule._fov_weapons_spring.Value = -49.75
 renderCallback()
 assert(clicks == 2, "Trigger Bot must fire once the scoped weapon finishes entering ADS")
+
+do
+local previousPart = observations[1].part
+localItem.Name = "Sniper"
+localItem.Info = {
+    AimScopePercent = 0.5,
+    DisplayName = "Sniper",
+    ShootSpread = 15,
+}
+localItem.Data = { IsAiming = false }
+local fullyAiming = false
+localItem.IsFullyAiming = function()
+    return fullyAiming
+end
+observations[1].part = {
+    Name = "Torso",
+    Size = Vector3.new(2, 2, 1),
+}
+crouching = false
+observations[1].position = origin + Vector3.new(0, 0, -30)
+runtimeAimRoot.Position = observations[1].position
+currentTime += 1
+local sniperClicks = clicks
+renderCallback()
+assert(
+    clicks == sniperClicks,
+    "Adapter Trigger Bot must wait for an unreliable far unscoped Sniper shot"
+)
+
+observations[1].position = origin + Vector3.new(0, 0, -6)
+runtimeAimRoot.Position = observations[1].position
+settings.shotAim = true
+currentTime += 1
+renderCallback()
+assert(
+    clicks == sniperClicks,
+    "Silent Aim Sniper Trigger Bot must wait for the matching presented target"
+)
+cameraHarness.runCameraRenderFrame()
+currentTime += 1
+renderCallback()
+assert(
+    clicks == sniperClicks + 1,
+    "Silent Aim Sniper Trigger Bot must fire a reliable close unscoped shot after presentation"
+)
+settings.shotAim = false
+
+localItem.Data.IsAiming = true
+cameraModule._fov_weapons_spring = { Value = -49.75, Target = -50 }
+currentTime += 1
+renderCallback()
+assert(
+    clicks == sniperClicks + 1,
+    "Adapter Trigger Bot must wait while native Sniper ADS is incomplete"
+)
+fullyAiming = true
+currentTime += 1
+renderCallback()
+assert(
+    clicks == sniperClicks + 2,
+    "Adapter Trigger Bot must fire after native Sniper ADS settles"
+)
+
+localItem.Data.IsAiming = false
+fullyAiming = false
+observations[1].position = origin + Vector3.new(0, 0, -9)
+runtimeAimRoot.Position = observations[1].position
+crouching = false
+currentTime += 1
+renderCallback()
+assert(
+    clicks == sniperClicks + 2,
+    "Adapter Trigger Bot must keep standing no-scopes inside the reliable spread range"
+)
+crouching = true
+currentTime += 1
+renderCallback()
+assert(
+    clicks == sniperClicks + 3,
+    "Adapter Trigger Bot must extend reliable no-scope range while crouching"
+)
+
+crouching = false
+localItem.IsFullyAiming = nil
+observations[1].part = previousPart
+observations[1].position = targetPosition
+runtimeAimRoot.Position = targetPosition
+end
 
 localItem.Name = "Shorty"
 localItem.Info = table.clone(shorty.Info)
@@ -2528,6 +3051,7 @@ end
 fighterModule.LocalFighter.Data.IsInShootingRange = false
 settings.silentAim = true
 settings.humanAim = true
+settings.headshotRate = 100
 settings.aimSmoothness = 100
 cameraModule.Rotation = RivalsTargeting.rotationToward(origin, runtimeAimHead.Position)
     + Vector2.new(0, math.rad(4))
@@ -2544,6 +3068,7 @@ assert(
 fighterModule.LocalFighter.Data.IsInShootingRange = true
 settings.silentAim = false
 settings.humanAim = false
+settings.headshotRate = 0
 settings.aimSmoothness = 0
 runtimeAimHead.Position = targetPosition + Vector3.new(0, 2, 0)
 
@@ -2591,6 +3116,32 @@ assert(
     clicks == quickBowClicks + 1 and aimPresses == 1 and aimReleases == 1,
     "Bow Trigger Bot must tap primary fire when one faster uncharged shot is lethal"
 )
+
+do
+    local practiceBowPresses = aimPresses
+    local practiceBowClicks = clicks
+    local practiceEnemyScreenDistance = observations[1].screenDistance
+    local practiceDummyScreenDistance = rangeObservation.screenDistance
+    observations[1].screenDistance = settings.fov + 1
+    rangeObservation.screenDistance = 4
+    rangeObservation.part = { Name = "Torso" }
+    currentTime += 1
+    renderCallback()
+    assert(
+        rangeObservation.health == 150 and rangeObservation.maxHealth == 150,
+        "Infinite-health practice dummies must expose representative full player health"
+    )
+    assert(
+        aimPresses == practiceBowPresses + 1 and clicks == practiceBowClicks,
+        "Bow Trigger Bot must charge practice dummies through ADS instead of primary-clicking"
+    )
+    settings.triggerBot = false
+    renderCallback()
+    settings.triggerBot = true
+    observations[1].screenDistance = practiceEnemyScreenDistance
+    rangeObservation.screenDistance = practiceDummyScreenDistance
+    rangeObservation.part = nil
+end
 
 do
 localItem.Name = "Revolver"
@@ -2777,6 +3328,7 @@ localItem.Info = {
     CriticalDamage = 150,
     DisplayName = "Knife",
 }
+grounded = true
 observations[1].visible = true
 observations[1].screenDistance = settings.fov + 100
 fighterModule.LocalFighter.Entity.RootPart.Position = targetPosition + Vector3.xAxis * 1.5
@@ -2802,15 +3354,49 @@ currentTime += 2
 local backstabClicks = clicks
 local backstabAimClicks = aimClicks
 local backstabRotations = rotationCalls
+grounded = false
 renderCallback()
 assert(
     rotationCalls == backstabRotations + 1,
     "Knife Camera Aim must lock only from a lethal rear position"
 )
 assert(
-    clicks == backstabClicks and aimClicks == backstabAimClicks + 1,
-    "Knife Trigger Bot must use secondary fire for the live heavy/backstab attack"
+    clicks == backstabClicks and aimClicks == backstabAimClicks,
+    "Knife Trigger Bot must not backstab from a stale airborne rear window"
 )
+grounded = true
+currentTime += 1 / 60
+renderCallback()
+assert(
+    clicks == backstabClicks and aimClicks == backstabAimClicks + 1,
+    "Knife Trigger Bot must use secondary fire from current grounded lethal rear geometry"
+)
+
+settings.bhop = true
+wHeld = false
+movementDirection = Vector3.xAxis
+sliding = false
+grounded = true
+canSlide = true
+localItem._testKnifeIsSlidingMethod = fighterModule.LocalFighter.IsSliding
+fighterModule.LocalFighter.IsSliding = false
+localItem._testKnifeHighJumpCalls = highJumpCalls
+renderCallback()
+fighterModule.LocalFighter.IsSliding = true
+currentTime += 1 / 60
+renderCallback()
+currentTime += 1 / 60
+renderCallback()
+assert(
+    not toggledInputs.Space and highJumpCalls == localItem._testKnifeHighJumpCalls,
+    "RIVALS Bunny Hop must suppress high jumps while a Knife backstab is approaching or striking"
+)
+settings.bhop = false
+movementDirection = Vector3.zero
+renderCallback()
+fighterModule.LocalFighter.IsSliding = localItem._testKnifeIsSlidingMethod
+localItem._testKnifeHighJumpCalls = nil
+localItem._testKnifeIsSlidingMethod = nil
 
 target.character.FindFirstChildOfClass = function(_self, className)
     if className == "Humanoid" then
@@ -2873,6 +3459,47 @@ assert(
     not toggledInputs.LeftShift and not toggledInputs.C and not toggledInputs.Space,
     "Disabling RIVALS Bunny Hop must clear every synthetic movement input"
 )
+
+mechanicsModule._successfulSlide = mechanicsModule.Slide
+mechanicsModule.Slide = function(self)
+    slideCalls += 1
+    if slideCalls >= self._retryStart + 2 then
+        self.IsSliding = true
+    end
+end
+mechanicsModule._retryStart = slideCalls
+mechanicsModule._retryJumpStart = highJumpCalls
+settings.bhop = true
+movementDirection = Vector3.xAxis
+grounded = true
+canSlide = true
+fighterModule.LocalFighter.IsSliding = false
+mechanicsModule.IsSliding = false
+renderCallback()
+currentTime += 1 / 60
+renderCallback()
+currentTime += 1 / 60
+renderCallback()
+currentTime += 1 / 60
+renderCallback()
+currentTime += 1 / 60
+renderCallback()
+currentTime += 1 / 60
+renderCallback()
+currentTime += 1 / 60
+renderCallback()
+assert(
+    slideCalls == mechanicsModule._retryStart + 2
+        and highJumpCalls == mechanicsModule._retryJumpStart + 1,
+    "RIVALS Bunny Hop must retry and resume after a slide is rejected during native cooldown"
+)
+settings.bhop = false
+movementDirection = Vector3.zero
+renderCallback()
+mechanicsModule.Slide = mechanicsModule._successfulSlide
+mechanicsModule._successfulSlide = nil
+mechanicsModule._retryStart = nil
+mechanicsModule._retryJumpStart = nil
 
 for _, direction in ipairs({
     -Vector3.zAxis,
