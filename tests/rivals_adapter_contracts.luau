@@ -22,6 +22,7 @@ assert(
     table.find(Rivals.capabilities, "silentAim")
         and table.find(Rivals.capabilities, "shotAim")
         and table.find(Rivals.capabilities, "triggerBot")
+        and table.find(Rivals.capabilities, "scopedAccuracy")
         and table.find(Rivals.capabilities, "humanAim")
         and table.find(Rivals.capabilities, "aimSmoothness")
         and table.find(Rivals.capabilities, "headshotRate")
@@ -249,6 +250,73 @@ assert(
     crownAim.position == crownPoint and crownAim.part == aimHead,
     "Head aim must choose the highest exposed crown point when the center is body-occluded"
 )
+local proxyCharacter
+local criticalProxy = {
+    CFrame = CFrame.new(Vector3.new(0, 3.2, 0)),
+    GetAttribute = function(_self, name)
+        return name == "IsCritical" and true or nil
+    end,
+    Name = "HitboxHead",
+    Position = Vector3.new(0, 3.2, 0),
+    Size = Vector3.new(2, 2, 2),
+}
+local physicalProxy = {
+    GetAttribute = function()
+        return nil
+    end,
+    IsDescendantOf = function(_self, value)
+        return value == proxyCharacter
+    end,
+    Name = "PhysicalHitboxHead",
+}
+local proxyBody = {
+    GetAttribute = function()
+        return nil
+    end,
+    IsDescendantOf = function(_self, value)
+        return value == proxyCharacter
+    end,
+    Name = "HitboxBody",
+}
+proxyCharacter = {
+    FindFirstChild = function(_self, name)
+        return ({
+            Head = aimHead,
+            HitboxHead = criticalProxy,
+            HumanoidRootPart = aimRoot,
+        })[name]
+    end,
+}
+criticalProxy.IsDescendantOf = function(_self, value)
+    return value == proxyCharacter
+end
+local criticalProxyCrown = criticalProxy.CFrame:PointToWorldSpace(
+    Vector3.new(0, criticalProxy.Size.Y * 0.45, 0)
+)
+local proxyAim = RivalsTargeting.applyAimRates({
+    character = proxyCharacter,
+    part = aimRoot,
+    position = aimRoot.Position,
+}, {
+    headshotRate = 100,
+    missRate = 0,
+}, function()
+    return 0
+end, {
+    origin = lowCameraOrigin,
+    raycast = function(raycastOrigin, displacement)
+        local point = raycastOrigin + displacement
+        return {
+            Instance = (point - criticalProxyCrown).Magnitude < 1e-5
+                    and physicalProxy
+                or proxyBody,
+        }
+    end,
+})
+assert(
+    proxyAim.position == criticalProxyCrown and proxyAim.part == criticalProxy,
+    "A 100% headshot rate must aim through exposed native head proxies instead of falling back to body"
+)
 local centerAim = RivalsTargeting.applyAimRates(baseAimObservation, {
     headshotRate = 100,
     missRate = 0,
@@ -280,7 +348,9 @@ end, {
     end,
 })
 assert(
-    blockedHeadAim.position == aimRoot.Position and blockedHeadAim.part == aimRoot,
+    blockedHeadAim.position == aimRoot.Position
+        and blockedHeadAim.part == aimRoot
+        and blockedHeadAim.preferHead == true,
     "Head aim must fall back to a visible body point when no bounded head candidate is exposed"
 )
 local obscuredBodyPosition, obscuredBodyPart = RivalsTargeting.visibleBodyPoint({
@@ -433,6 +503,28 @@ local scopeCamera = {
 assert(RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == false)
 scopeCamera._fov_weapons_spring.Value = -49.75
 assert(RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == true)
+scopedItem.fullyAiming = true
+scopedItem.IsFullyAiming = function(self)
+    return self.fullyAiming
+end
+scopeCamera._fov_weapons_spring.Value = 0
+assert(
+    RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == true,
+    "Trigger Bot must fire when the native item reports the server-facing scoped state"
+)
+scopedItem.fullyAiming = false
+scopeCamera._fov_weapons_spring.Value = -49.75
+assert(
+    RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == false,
+    "Trigger Bot must not fire before the native item reports the server-facing scoped state"
+)
+scopedItem.IsFullyAiming = function()
+    error("native readiness unavailable")
+end
+assert(
+    RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == true,
+    "Trigger Bot must retain the FOV fallback when native readiness cannot be read"
+)
 scopedItem.Data.IsAiming = false
 assert(RivalsWeaponPolicy.adsSettled(scopeCamera, scopedItem) == true)
 
@@ -455,15 +547,23 @@ local sniperTarget = {
 }
 assert(
     RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 30, false) == false,
-    "Sniper Trigger Bot must wait for a far unscoped target outside the 50% radial hit cutoff"
+    "Sniper Trigger Bot must wait for a far unscoped target outside the 40% radial hit cutoff"
+)
+assert(
+    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 30, false, true) == true,
+    "Scoped Accuracy must let Sniper Trigger Bot treat an eligible forced shot as scoped"
 )
 assert(
     RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 6, false) == true,
-    "Sniper Trigger Bot must allow a close unscoped target inside the 50% radial hit cutoff"
+    "Sniper Trigger Bot must allow a close unscoped target inside the 40% radial hit cutoff"
 )
 assert(
-    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 9, false) == false,
-    "Sniper Trigger Bot must keep the standing no-scope cone conservative"
+    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 9, false) == true,
+    "Sniper Trigger Bot must accept a modestly riskier standing no-scope shot"
+)
+assert(
+    RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 11, false) == false,
+    "Sniper Trigger Bot must still reject a farther standing no-scope shot"
 )
 assert(
     RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 9, true) == true,
@@ -544,10 +644,45 @@ local bow = {
         ShootCooldown = 0.25,
     },
 }
+assert(
+    RivalsWeaponPolicy.isCriticalPart({
+        GetAttribute = function(_self, name)
+            return name == "IsCritical" and true or nil
+        end,
+        Name = "HitboxBody",
+    }) == true,
+    "Weapon policy must classify an authoritative native critical proxy as a headshot"
+)
+assert(
+    RivalsWeaponPolicy.isCriticalPart({ Name = "HitboxHead" }) == true
+        and RivalsWeaponPolicy.isCriticalPart({ Name = "HitboxHeadSmall" }) == true
+        and RivalsWeaponPolicy.isCriticalPart({ Name = "PhysicalHitboxHead" }) == true,
+    "Weapon policy must recognize only the known native head proxy names"
+)
+assert(
+    RivalsWeaponPolicy.isCriticalPart({ Name = "HitboxBody" }) == false
+        and RivalsWeaponPolicy.isCriticalPart({ Name = "HeadDecoration" }) == false
+        and RivalsWeaponPolicy.isCriticalPart({ Name = "UpperTorso" }) == false,
+    "Weapon policy must not promote arbitrary or body hitboxes into headshots"
+)
 assert(RivalsWeaponPolicy.bowChargeTime(bow, { health = 40, part = { Name = "Torso" } }) == 1)
 assert(RivalsWeaponPolicy.bowChargeTime(bow, { health = 70, part = { Name = "Head" } }) == 0.3)
+assert(
+    RivalsWeaponPolicy.bowChargeTime(bow, {
+        health = 70,
+        part = { Name = "PhysicalHitboxHead" },
+    }) == 0.3,
+    "Bow charge planning must use the critical damage of native head proxies"
+)
 assert(RivalsWeaponPolicy.bowChargeTime(bow, { health = 200, part = { Name = "Torso" } }) == 1.8)
 assert(RivalsWeaponPolicy.bowQuickShotLethal(bow, { health = 30, part = { Name = "Torso" } }) == true)
+assert(
+    RivalsWeaponPolicy.bowQuickShotLethal(bow, {
+        health = 60,
+        part = { Name = "PhysicalHitboxHead" },
+    }) == true,
+    "Bow quick-shot lethality must use critical damage for native head proxies"
+)
 assert(RivalsWeaponPolicy.bowQuickShotLethal(bow, { health = 60, part = { Name = "Head" } }) == true)
 assert(RivalsWeaponPolicy.bowQuickShotLethal(bow, { health = 31, part = { Name = "Torso" } }) == false)
 local similarCooldownBow = {
@@ -692,10 +827,21 @@ assert(
     "Trigger Bot must expose a range-aware damage decision"
 )
 assert(RivalsWeaponPolicy.damageAtDistance(shorty, { part = { Name = "Torso" } }, 10) == 75)
+assert(
+    RivalsWeaponPolicy.damageAtDistance(shorty, { part = { Name = "HitboxHead" } }, 10) == 112.5,
+    "Damage falloff must start from critical damage for native head proxies"
+)
 assert(math.abs(RivalsWeaponPolicy.damageAtDistance(shorty, { part = { Name = "Torso" } }, 25) - 24.975) < 1e-6)
 assert(
     RivalsWeaponPolicy.triggerDamageReady(shorty, { health = 150, part = { Name = "Torso" } }, 20) == false,
     "Trigger Bot must wait instead of wasting a severe-falloff body shot"
+)
+assert(
+    RivalsWeaponPolicy.triggerDamageReady(shorty, {
+        health = 60,
+        part = { Name = "HitboxHeadSmall" },
+    }, 20) == true,
+    "Trigger Bot must retain a lethal falloff shot when the selected hitbox is a native head proxy"
 )
 assert(
     RivalsWeaponPolicy.triggerDamageReady(
@@ -2068,6 +2214,7 @@ local settings = {
     humanAim = false,
     missRate = 0,
     shotAim = false,
+    scopedAccuracy = false,
     silentAim = true,
     triggerBot = false,
     utilityEsp = true,
@@ -2268,6 +2415,7 @@ local adapter = Rivals.new({
     rivalsTargeting = RivalsTargeting,
     projectileAim = RivalsProjectileAim,
     shotPresentation = RivalsShotPresentation,
+    scopedAccuracy = require("../games/rivals/ScopedAccuracy"),
     weaponPolicy = RivalsWeaponPolicy,
     effects = RivalsEffects,
     movement = RivalsMovement,
@@ -2881,6 +3029,15 @@ assert(
     clicks == sniperClicks,
     "Adapter Trigger Bot must wait for an unreliable far unscoped Sniper shot"
 )
+settings.scopedAccuracy = true
+currentTime += 1
+renderCallback()
+assert(
+    clicks == sniperClicks + 1,
+    "Scoped Accuracy must let Trigger Bot fire an eligible Sniper shot without user ADS"
+)
+settings.scopedAccuracy = false
+sniperClicks = clicks
 
 observations[1].position = origin + Vector3.new(0, 0, -6)
 runtimeAimRoot.Position = observations[1].position
@@ -2924,14 +3081,22 @@ crouching = false
 currentTime += 1
 renderCallback()
 assert(
-    clicks == sniperClicks + 2,
-    "Adapter Trigger Bot must keep standing no-scopes inside the reliable spread range"
+    clicks == sniperClicks + 3,
+    "Adapter Trigger Bot must accept the modestly riskier standing no-scope range"
+)
+observations[1].position = origin + Vector3.new(0, 0, -11)
+runtimeAimRoot.Position = observations[1].position
+currentTime += 1
+renderCallback()
+assert(
+    clicks == sniperClicks + 3,
+    "Adapter Trigger Bot must still reject a farther standing no-scope shot"
 )
 crouching = true
 currentTime += 1
 renderCallback()
 assert(
-    clicks == sniperClicks + 3,
+    clicks == sniperClicks + 4,
     "Adapter Trigger Bot must extend reliable no-scope range while crouching"
 )
 

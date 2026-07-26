@@ -41,7 +41,7 @@ local chunk, compileError = loadstring(source, "hub.lua")
 local result = assert(chunk, compileError)()
 assert(result == "hub-loader-ok")
 assert(
-    #requested == 18,
-    "Hub loader must fetch Hydroxide, init.lua, and its sixteen module source files"
+    #requested == 19,
+    "Hub loader must fetch Hydroxide, init.lua, and its seventeen module source files"
 )
 print("hub-loader-contracts-ok")

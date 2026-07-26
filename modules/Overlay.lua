@@ -8,7 +8,7 @@ local OPTION_GROUPS = {
         rows = {
             { "silentAim", "shotAim", "wallbang" },
             { "humanAim", "rapidFire" },
-            { "triggerBot", "noSpread" },
+            { "triggerBot", "scopedAccuracy", "noSpread" },
             { "noRecoil", "noWeaponSlow" },
         },
     },
@@ -43,6 +43,7 @@ local OPTION_LABELS = {
     bhop = "Bunny Hop",
     bombTimer = "Bomb Timer",
     rapidFire = "Rapid Fire",
+    scopedAccuracy = "Scoped Accuracy",
     shotAim = "Silent Aim",
     silentAim = "Silent Aim",
     triggerBot = "Trigger Bot",

@@ -9,6 +9,7 @@ local Rivals = {
         "silentAim",
         "shotAim",
         "triggerBot",
+        "scopedAccuracy",
         "humanAim",
         "bhop",
         "aimSmoothness",
@@ -25,6 +26,7 @@ local Rivals = {
     },
     optionLabels = {
         humanAim = "Human Aim",
+        scopedAccuracy = "Scoped Accuracy",
         silentAim = "Camera Aim",
         shotAim = "Silent Aim",
     },
@@ -118,6 +120,7 @@ function Rivals.new(context)
     assert(context.rivalsTargeting, "RIVALS adapter requires its targeting module")
     assert(context.projectileAim, "RIVALS adapter requires its projectile aim module")
     assert(context.shotPresentation, "RIVALS adapter requires its shot presentation module")
+    assert(context.scopedAccuracy, "RIVALS adapter requires its scoped-accuracy module")
     assert(context.weaponPolicy, "RIVALS adapter requires its weapon policy module")
     assert(context.effects, "RIVALS adapter requires its effects module")
     assert(context.movement, "RIVALS adapter requires its movement module")
@@ -178,6 +181,7 @@ function Rivals.new(context)
     local Targeting = context.rivalsTargeting
     local ProjectileAim = context.projectileAim
     local ShotPresentation = context.shotPresentation
+    local ScopedAccuracy = context.scopedAccuracy
     local WeaponPolicy = context.weaponPolicy
     local Effects = context.effects
     local Movement = context.movement
@@ -1001,6 +1005,17 @@ function Rivals.new(context)
         runService = RunService,
         workspace = Workspace,
     })
+    local scopedAccuracy = ScopedAccuracy.new({
+        getFighter = function()
+            return FighterController.LocalFighter
+        end,
+        hookFunction = context.hookFunction,
+        isEnabled = function()
+            return not stopped and store:Get().settings.scopedAccuracy == true
+        end,
+        restoreFunction = context.restoreFunction,
+    })
+    scopedAccuracy:refreshHook()
 
     local function updateShotAimPresentation(aligned)
         local camera = Workspace.CurrentCamera
@@ -1204,7 +1219,8 @@ function Rivals.new(context)
             item,
             target,
             targetDistance,
-            sniperCrouching
+            sniperCrouching,
+            settings.scopedAccuracy == true
         ) then
             releaseFire()
             return
@@ -1306,6 +1322,7 @@ function Rivals.new(context)
             return
         end
         installCameraDataHook()
+        scopedAccuracy:refreshHook()
         if type(deltaTime) == "number" and deltaTime > 0 then
             renderDelta = deltaTime
         end
@@ -1365,6 +1382,7 @@ function Rivals.new(context)
             return
         end
         stopped = true
+        scopedAccuracy:stop()
         shotPresentation:stop()
         if triggerHeld then
             context.aimRelease()

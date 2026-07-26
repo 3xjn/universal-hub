@@ -111,6 +111,7 @@ local store = Store.new({
         noSpread = false,
         noWeaponSlow = false,
         rapidFire = false,
+        scopedAccuracy = false,
         silentAim = false,
         spinBot = false,
         triggerBot = false,
@@ -887,6 +888,7 @@ local rivalsOverlay = Overlay.new({
     capabilities = {
         "aimSmoothness",
         "humanAim",
+        "scopedAccuracy",
         "silentAim",
         "triggerBot",
         "headshotRate",
@@ -928,6 +930,10 @@ assert(
     "Game adapters must share the same composed Drawing shell and toggle primitives"
 )
 assert(rivalsOverlay.controls.options.triggerBot ~= nil)
+assert(
+    rivalsOverlay.controls.options.scopedAccuracy.label.Text == "Scoped Accuracy",
+    "RIVALS must expose the generic scoped-shot accuracy option"
+)
 assert(
     rivalsOverlay.controls.rates.aimSmoothness
         and rivalsOverlay.controls.rates.headshotRate

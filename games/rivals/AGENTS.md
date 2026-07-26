@@ -20,9 +20,11 @@ The per-frame flow is:
 5. Camera Aim updates the logical camera immediately. Silent Aim promotes the
    target only after `ShotPresentation` has staged the matching native camera
    frame.
-6. Trigger Bot evaluates that same target, then `WeaponPolicy` decides whether
+6. `ScopedAccuracy` optionally reports eligible native Gun shots as scoped
+   without changing the user's ADS/FOV state.
+7. Trigger Bot evaluates that same target, then `WeaponPolicy` decides whether
    and how the equipped weapon may act.
-7. `Movement` and `Effects` update independently under the same combat gates.
+8. `Movement` and `Effects` update independently under the same combat gates.
 
 ## Module map
 
@@ -49,6 +51,11 @@ The per-frame flow is:
   - Silent Aim's native `GetCameraData` presentation handshake.
   - Separates logical shot rotation from the rendered camera and restores the
     visible view around the native camera render step.
+- `ScopedAccuracy.lua`
+  - Opt-in native `IsFullyAiming` policy for equipped Guns with a positive
+    `AimScopePercent`.
+  - Does not mutate `IsAiming`, viewmodel progress, FOV, or persistent item
+    state, and restores its hook on weapon changes and reload.
 - `WeaponPolicy.lua`
   - Pure or mostly pure item rules: labels, damage/falloff, ADS readiness,
     hold-to-fire, Bow charge, Revolver action choice, Knife backstab, and
@@ -92,9 +99,15 @@ infer behavior from the setting name alone.
   projectile solving must apply the weapon's `ProjectileSpawnOffset` before
   iterating lead and gravity. Do not add speculative latency or
   shooter-velocity inheritance.
-- Head preference must first test center visibility, then bounded crown
-  points. A body part in front of the point is not a head hit; accept the Head
-  or a descendant explicitly marked `IsCritical`.
+- Head preference must use live critical `HitboxHead`/`HitboxHeadSmall`
+  geometry before the smaller visual Head, then test center and bounded crown
+  points. A body part in front of the point is not a head hit; accept only
+  target-descendant native head proxies or parts explicitly marked
+  `IsCritical`.
+- Scoped Accuracy is opt-in and may only override the equipped item when it
+  exposes the common native `IsFullyAiming` seam and a positive numeric
+  `AimScopePercent`. Keep normal ADS readiness on the native predicate; camera
+  FOV is fallback evidence only.
 - Utility ESP classification is tag-first and must reject held/viewmodel/local
   copies. Tripmine renders as a 12-edge wireframe cube; generic utilities keep
   their compact marker.

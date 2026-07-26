@@ -40,6 +40,7 @@ luau-lsp analyze \
     games/rivals/Targeting.lua \
     games/rivals/ProjectileAim.lua \
     games/rivals/ShotPresentation.lua \
+    games/rivals/ScopedAccuracy.lua \
     games/rivals/WeaponPolicy.lua \
     games/rivals/Effects.lua \
     games/rivals/Movement.lua \
@@ -59,4 +60,5 @@ lune run tests/counterblox_adapter_contracts.luau
 lune run tests/rivals_combat_state_contracts.luau
 lune run tests/rivals_adapter_contracts.luau
 lune run tests/shot_presentation_binding_contracts.luau
+lune run tests/scoped_accuracy_contracts.luau
 printf 'universal-hub-check-ok\n'
