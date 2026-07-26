@@ -47,7 +47,14 @@ local Registry = import("modules/Registry")
 local Session = import("modules/Session")
 local Overlay = import("modules/Overlay")
 local Counterblox = import("games/Counterblox")
-local Rivals = import("games/Rivals")
+local Rivals = import("games/rivals/Adapter")
+local RivalsTargeting = import("games/rivals/Targeting")
+local RivalsProjectileAim = import("games/rivals/ProjectileAim")
+local RivalsShotPresentation = import("games/rivals/ShotPresentation")
+local RivalsWeaponPolicy = import("games/rivals/WeaponPolicy")
+local RivalsEffects = import("games/rivals/Effects")
+local RivalsMovement = import("games/rivals/Movement")
+local RivalsCombatState = import("games/rivals/CombatState")
 
 local registry = Registry.new()
 registry:Register(Counterblox)
@@ -66,6 +73,7 @@ local defaultSettings = {
     aimSmoothness = 0,
     bhop = false,
     boxes = true,
+    bombTimer = true,
     chams = true,
     fov = 180,
     fovCircle = true,
@@ -86,10 +94,13 @@ local defaultSettings = {
     noSmoke = false,
     noSpread = false,
     noWeaponSlow = false,
+    rapidFire = false,
+    shotAim = false,
     silentAim = false,
     skinOverrides = {},
     spinBot = false,
     triggerBot = false,
+    utilityEsp = true,
     wallbang = false,
     weapon = true,
 }
@@ -136,6 +147,10 @@ local store = Store.new({
     error = nil,
     menuVisible = true,
     observations = {},
+    bombObservation = {
+        visible = false,
+    },
+    utilityObservations = {},
     gloves = {
         maximumWear = 1,
         minimumWear = 0,
@@ -191,6 +206,15 @@ overlay = Overlay.new({
     getCamera = function()
         return Workspace.CurrentCamera
     end,
+    uiParent = (function()
+        local success, parent = pcall(function()
+            if type(gethui) == "function" then
+                return gethui()
+            end
+            return game:GetService("CoreGui")
+        end)
+        return success and parent or nil
+    end)(),
     optionLabels = adapterDefinition.optionLabels,
     setFov = function(value)
         session:setFov(value)
@@ -207,6 +231,13 @@ overlay = Overlay.new({
     end,
     setOption = function(name, enabled)
         session:setOption(name, enabled)
+        if enabled and adapterDefinition.exclusiveOptions then
+            for _, excluded in ipairs(
+                adapterDefinition.exclusiveOptions[name] or {}
+            ) do
+                session:setOption(excluded, false)
+            end
+        end
     end,
     setRate = function(name, value)
         session:setRate(name, value)
@@ -248,9 +279,15 @@ local created, result = pcall(adapterDefinition.new, {
     gcObjects = function()
         return getgc(true)
     end,
+    getLoadedModules = type(environment.getloadedmodules) == "function"
+            and environment.getloadedmodules
+        or nil,
     hookFunction = hookfunction,
     isInputCaptured = function()
         return inputCapture:IsEnabled()
+    end,
+    isFireHeld = function()
+        return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
     end,
     isJumpHeld = function()
         return UserInputService:IsKeyDown(Enum.KeyCode.Space)
@@ -275,14 +312,21 @@ local created, result = pcall(adapterDefinition.new, {
         return direction.Magnitude > 1 and direction.Unit or direction
     end,
     oh = oh,
-    render = function(observations, mousePosition)
-        overlay:render(observations, mousePosition)
+    render = function(observations, mousePosition, utilityObservations)
+        overlay:render(observations, mousePosition, utilityObservations)
     end,
     restoreFunction = restorefunction,
     settingsChanged = function(updatedSettings)
         configStore:save(updatedSettings)
     end,
     setThirdPerson = setThirdPerson,
+    rivalsTargeting = RivalsTargeting,
+    projectileAim = RivalsProjectileAim,
+    shotPresentation = RivalsShotPresentation,
+    weaponPolicy = RivalsWeaponPolicy,
+    effects = RivalsEffects,
+    movement = RivalsMovement,
+    combatState = RivalsCombatState,
     store = store,
 })
 if not created then

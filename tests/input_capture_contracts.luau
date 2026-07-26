@@ -120,7 +120,10 @@ capture:SetEnabled(true)
 assert(capture:IsEnabled() == true)
 assert(action and action.callback() == Enum.ContextActionResult.Sink)
 assert(actionPriority > Enum.ContextActionPriority.High.Value)
-assert(#actionInputs == 5, "Menu capture must sink mouse buttons, movement, wheel, and touch")
+assert(
+    #actionInputs == 4 and not table.find(actionInputs, Enum.UserInputType.MouseMovement),
+    "Visible menu must not sink raw mouse movement or the unlocked RIVALS lobby cursor freezes"
+)
 assert(heartbeatCallback, "Cursor release must run after the game's render-phase camera lock")
 assert(userInputService.MouseBehavior == Enum.MouseBehavior.Default)
 assert(userInputService.MouseIconEnabled == true)

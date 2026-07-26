@@ -1,4 +1,28 @@
 local Counterblox = {
+    capabilities = {
+        "silentAim",
+        "triggerBot",
+        "wallbang",
+        "knifeAura",
+        "microStep",
+        "spinBot",
+        "bhop",
+        "rapidFire",
+        "bombTimer",
+        "utilityEsp",
+        "headshotRate",
+        "missRate",
+        "noSpread",
+        "noRecoil",
+        "noFlash",
+        "noSmoke",
+        "noWeaponSlow",
+        "boxes",
+        "chams",
+        "names",
+        "health",
+        "weapon",
+    },
     id = "counterblox",
     label = "Counterblox",
     manifest = {
@@ -7,16 +31,22 @@ local Counterblox = {
     },
 }
 
-local KNIFE_AURA_INTERVAL = 0.12
+local KNIFE_AURA_INTERVAL = 0.06
 local KNIFE_EXTRA_REACH = 3
 local KNIFE_FALLBACK_RANGE = 7
+local KNIFE_HIT_TOLERANCE = 1.5
 local KNIFE_MICRO_STEP = 0.75
 local BHOP_AIR_ACCELERATION = 10
 local BHOP_SPEED_MULTIPLIER = 1.35
+local RAPID_FIRE_INTERVAL = 0.04
 local SPIN_SPEED = math.rad(1440)
 local THIRD_PERSON_DISTANCE = 8
 local MOVEMENT_RENDER_STEP = "UniversalHubCounterbloxMovement"
 local MOVEMENT_RENDER_PRIORITY = 2000
+local BOMB_MARKER_MAX_DISTANCE = 350
+local BOMB_MARKER_THROUGH_WALL_DISTANCE = 160
+local UTILITY_MAX_DISTANCE = 500
+local MAX_ZONE_QUADS = 48
 
 local function contains(list, value)
     for _, candidate in ipairs(list or {}) do
@@ -45,6 +75,66 @@ function Counterblox.cosmeticLabel(skin)
     return skin
 end
 
+function Counterblox.bombTimeRemaining(data, serverTime)
+    data = type(data) == "table" and data or {}
+    serverTime = type(serverTime) == "number" and serverTime or 0
+    local plantedAt = type(data.Time) == "number" and data.Time or serverTime
+    local duration = type(data.TimeUntilExplode) == "number" and data.TimeUntilExplode or 40
+    return math.max(plantedAt + math.max(duration, 0.1) - serverTime, 0)
+end
+
+function Counterblox.bombPresentation(distance)
+    distance = math.max(type(distance) == "number" and distance or math.huge, 0)
+    local visible = distance <= BOMB_MARKER_MAX_DISTANCE
+    local closeness = 1 - math.clamp(distance / BOMB_MARKER_MAX_DISTANCE, 0, 1)
+    return {
+        alwaysOnTop = visible and distance <= BOMB_MARKER_THROUGH_WALL_DISTANCE,
+        height = math.round(20 + 10 * closeness),
+        textSize = math.round(12 + 4 * closeness),
+        visible = visible,
+        width = math.round(60 + 44 * closeness),
+    }
+end
+
+function Counterblox.utilityLabel(name)
+    local normalized = string.lower(tostring(name or ""))
+    if string.find(normalized, "incendiary", 1, true) then
+        return "INCENDIARY", "danger"
+    elseif string.find(normalized, "molotov", 1, true) then
+        return "MOLOTOV", "danger"
+    elseif string.find(normalized, "flash", 1, true) then
+        return "FLASH", "accent"
+    elseif string.find(normalized, "smoke", 1, true) then
+        return "SMOKE", "smoke"
+    elseif string.find(normalized, "decoy", 1, true) then
+        return "DECOY", "accent"
+    elseif string.find(normalized, "he grenade", 1, true)
+        or string.find(normalized, "explosive", 1, true)
+    then
+        return "HE", "danger"
+    end
+    return "GRENADE", "accent"
+end
+
+function Counterblox.planMeleeAttack(cameraPosition, attackerPosition, target, range)
+    local offset = target and target.position and target.position - cameraPosition
+    local plan = {
+        distance = offset and offset.Magnitude or math.huge,
+        heavy = false,
+        inRange = false,
+    }
+    plan.inRange = plan.distance <= math.max(range or 0, 0) + KNIFE_HIT_TOLERANCE
+
+    local character = target and target.character
+    local targetRoot = character and character:FindFirstChild("HumanoidRootPart")
+    local behind = targetRoot and attackerPosition - targetRoot.Position
+    if behind and behind.Magnitude > 0.001 then
+        local dot = math.clamp(targetRoot.CFrame.LookVector:Dot(behind.Unit), -1, 1)
+        plan.heavy = math.deg(math.acos(dot)) > 100
+    end
+    return plan
+end
+
 local function targetVisible(target)
     if target.visible ~= nil then
         return target.visible == true
@@ -53,6 +143,21 @@ local function targetVisible(target)
         return target.visibility.visible == true
     end
     return false
+end
+
+function Counterblox.nearestMeleeTarget(origin, observations)
+    local nearest
+    local nearestDistance = math.huge
+    for _, observation in ipairs(observations or {}) do
+        if targetVisible(observation) and observation.position then
+            local distance = (observation.position - origin).Magnitude
+            if distance < nearestDistance then
+                nearest = observation
+                nearestDistance = distance
+            end
+        end
+    end
+    return nearest
 end
 
 local function materialName(material)
@@ -86,6 +191,50 @@ function Counterblox.classifyWeapon(equipped)
         return "Knife"
     end
     return nil
+end
+
+function Counterblox.applyAimRates(observation, settings, random)
+    if not observation or not observation.position then
+        return observation
+    end
+
+    local result = table.clone(observation)
+    result.aimRatesApplied = true
+    random = random or math.random
+    local character = observation.character
+    if character then
+        for _, partName in ipairs({ "UpperTorso", "Torso", "LowerTorso", "HumanoidRootPart" }) do
+            local body = character:FindFirstChild(partName)
+            if body then
+                result.part = body
+                result.position = body.Position
+                break
+            end
+        end
+    end
+
+    local missRate = math.clamp(settings.missRate or 0, 0, 100)
+    if missRate > 0 and random() * 100 < missRate then
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if root then
+            local width = root.Size and root.Size.X or 2
+            result.intentionalMiss = true
+            result.part = root
+            result.position = root.Position + root.CFrame.RightVector * (width * 0.5 + 2.5)
+        end
+        return result
+    end
+
+    local headshotRate = math.clamp(settings.headshotRate or 0, 0, 100)
+    if headshotRate > 0 and random() * 100 < headshotRate then
+        local head = character and character:FindFirstChild("Head")
+        if head then
+            result.intentionalMiss = false
+            result.part = head
+            result.position = head.Position
+        end
+    end
+    return result
 end
 
 function Counterblox.redirectBullet(originalResult, target, bullet, api)
@@ -165,12 +314,14 @@ function Counterblox.new(context)
     local RunService = game:GetService("RunService")
     local UserInputService = game:GetService("UserInputService")
     local Workspace = game:GetService("Workspace")
+    local CollectionService = game:GetService("CollectionService")
     local LocalPlayer = Players.LocalPlayer
 
     local loadModule: (any) -> any = context.requireModule or require
     local Bullet = loadModule(ReplicatedStorage.Components.Weapon.Classes.Bullet)
     local Melee = loadModule(ReplicatedStorage.Components.Melee)
     local CameraController = loadModule(ReplicatedStorage.Controllers.CameraController)
+    local SpectateController = loadModule(ReplicatedStorage.Controllers.SpectateController)
     local CrosshairSettings =
         loadModule(ReplicatedStorage.Interface.Screens.Gameplay.Middle.Crosshair.Settings)
     local GetRayIgnore = loadModule(ReplicatedStorage.Components.Common.GetRayIgnore)
@@ -184,6 +335,9 @@ function Counterblox.new(context)
     local Skins = loadModule(ReplicatedStorage.Database.Components.Libraries.Skins)
 
     local click = assert(context.click, "Counterblox adapter requires a click function")
+    local press = assert(context.press, "Counterblox adapter requires a press function")
+    local heavyClick = assert(context.aimClick, "Counterblox adapter requires a right-click function")
+    local cancelThread = context.cancelThread or task.cancel
     local gcObjects = context.gcObjects or function()
         return {}
     end
@@ -194,6 +348,7 @@ function Counterblox.new(context)
         return UserInputService:IsKeyDown(Enum.KeyCode.Space)
     end
     local movementDirection = context.movementDirection
+    local random = context.random or math.random
     local store = context.store
     local targeting = context.oh.targeting
     local stopped = false
@@ -204,6 +359,7 @@ function Counterblox.new(context)
     local meleeTarget
     local meleeRange = KNIFE_FALLBACK_RANGE
     local nextAuraAt = 0
+    local nextRapidFireAt = 0
     local nextTriggerAt = 0
     local noFlashApplied = false
     local noSmokeApplied = false
@@ -226,6 +382,8 @@ function Counterblox.new(context)
     local trackedComponents = setmetatable({}, { __mode = "k" })
     local characterTransparency = setmetatable({}, { __mode = "k" })
     local viewmodelTransparency = setmetatable({}, { __mode = "k" })
+    local bombAttribute
+    local bombData
 
     local self = {}
 
@@ -275,14 +433,14 @@ function Counterblox.new(context)
         end
     end
 
-    local function isSpectatedCharacter(character)
-        local camera = Workspace.CurrentCamera
-        local subject = camera and camera.CameraSubject
-        return subject ~= nil
-            and (subject == character or subject.Parent == character or subject:IsDescendantOf(character))
-    end
-
     local function spectatedPlayer()
+        if SpectateController and type(SpectateController.GetPlayer) == "function" then
+            local success, player = pcall(SpectateController.GetPlayer)
+            if success and player then
+                return player
+            end
+        end
+
         local camera = Workspace.CurrentCamera
         local subject = camera and camera.CameraSubject
         if not subject then
@@ -290,6 +448,27 @@ function Counterblox.new(context)
         end
         return Players:GetPlayerFromCharacter(subject)
             or subject.Parent and Players:GetPlayerFromCharacter(subject.Parent)
+    end
+
+    local function isSpectatedCharacter(character)
+        local player = spectatedPlayer()
+        if player and player.Character == character then
+            return true
+        end
+
+        local camera = Workspace.CurrentCamera
+        local subject = camera and camera.CameraSubject
+        return subject ~= nil
+            and (subject == character or subject.Parent == character or subject:IsDescendantOf(character))
+    end
+
+    local function spectatorRaycastIgnore()
+        local player = spectatedPlayer()
+        local character = player and player.Character
+        if character and character ~= LocalPlayer.Character then
+            return { character }
+        end
+        return {}
     end
 
     local function isOpponent(player, character)
@@ -320,6 +499,7 @@ function Counterblox.new(context)
         local options = {
             includeBlocked = includeBlocked == true,
             isEligible = isOpponent,
+            raycastIgnore = spectatorRaycastIgnore(),
             screenOrigin = UserInputService:GetMouseLocation(),
         }
         if not settings.fullScreenAim then
@@ -768,6 +948,25 @@ function Counterblox.new(context)
         if not targetVisible(target) and not wallbangActive then
             return result
         end
+        if not target.aimRatesApplied then
+            target = Counterblox.applyAimRates(target, settings, random)
+        end
+        if target.intentionalMiss then
+            local offset = target.position - result.Origin
+            if offset.Magnitude > 0.001 then
+                store:Patch({
+                    lastShot = "Intentional miss",
+                    target = target.player,
+                })
+                return {
+                    Direction = offset.Unit,
+                    Distance = offset.Magnitude,
+                    Hits = {},
+                    Origin = result.Origin,
+                }
+            end
+            return result
+        end
 
         local redirected, accepted = Counterblox.redirectBullet(result, target, bullet, {
             cast = GameRaycast.cast,
@@ -1056,6 +1255,7 @@ function Counterblox.new(context)
     local function updateObservations()
         observations = targeting.observePlayers({
             isEligible = isOpponent,
+            raycastIgnore = spectatorRaycastIgnore(),
             screenOrigin = UserInputService:GetMouseLocation(),
         })
 
@@ -1072,7 +1272,164 @@ function Counterblox.new(context)
         return visibleCount
     end
 
-    local function equippedGunBullet()
+    local function tagged(tagName)
+        if not CollectionService or type(CollectionService.GetTagged) ~= "function" then
+            return {}
+        end
+        local success, instances = pcall(CollectionService.GetTagged, CollectionService, tagName)
+        return success and instances or {}
+    end
+
+    local function projectPosition(camera, position)
+        local point, onScreen = camera:WorldToViewportPoint(position)
+        return Vector2.new(point.X, point.Y), onScreen == true and point.Z > 0
+    end
+
+    local function projectTop(camera, part)
+        local half = part.Size * 0.5
+        local points = {}
+        for _, offset in ipairs({
+            Vector3.new(-half.X, half.Y + 0.04, -half.Z),
+            Vector3.new(half.X, half.Y + 0.04, -half.Z),
+            Vector3.new(half.X, half.Y + 0.04, half.Z),
+            Vector3.new(-half.X, half.Y + 0.04, half.Z),
+        }) do
+            local screen, onScreen = projectPosition(camera, part.CFrame:PointToWorldSpace(offset))
+            if not onScreen then
+                return nil
+            end
+            table.insert(points, screen)
+        end
+        return points
+    end
+
+    local function activeVoxels(folder, requireEnabledEmitter)
+        local parts = {}
+        local hasEnabledEmitter = false
+        for _, descendant in ipairs(folder:GetDescendants()) do
+            if descendant:IsA("BasePart") then
+                table.insert(parts, descendant)
+            elseif descendant:IsA("ParticleEmitter") and descendant.Enabled then
+                hasEnabledEmitter = true
+            end
+        end
+        return (not requireEnabledEmitter or hasEnabledEmitter) and parts or {}
+    end
+
+    local function zoneObservation(camera, folder, label, tone, requireEnabledEmitter)
+        local parts = activeVoxels(folder, requireEnabledEmitter)
+        if #parts == 0 then
+            return nil
+        end
+        local center = Vector3.new(0, 0, 0)
+        for _, part in ipairs(parts) do
+            center += part.Position
+        end
+        center /= #parts
+        local distance = (camera.CFrame.Position - center).Magnitude
+        if distance > UTILITY_MAX_DISTANCE then
+            return nil
+        end
+
+        local polygons = {}
+        local stride = math.max(1, math.ceil(#parts / MAX_ZONE_QUADS))
+        for index = 1, #parts, stride do
+            local polygon = projectTop(camera, parts[index])
+            if polygon then
+                table.insert(polygons, polygon)
+            end
+        end
+        local screenPosition, onScreen = projectPosition(camera, center + Vector3.new(0, 1.5, 0))
+        return {
+            key = folder,
+            label = label,
+            onScreen = onScreen,
+            polygons = polygons,
+            screenPosition = screenPosition,
+            tone = tone,
+        }
+    end
+
+    local function updateWorldObservations(settings)
+        local camera = Workspace.CurrentCamera
+        local utilities = {}
+        local bombObservation = {
+            visible = false,
+        }
+        if not camera then
+            return bombObservation, utilities
+        end
+
+        if settings.bombTimer then
+            for _, model in ipairs(tagged("Bomb")) do
+                local primaryPart = model.PrimaryPart
+                local encoded = model:GetAttribute("BombPlanted")
+                if primaryPart and type(encoded) == "string"
+                    and model:GetAttribute("Defused") ~= true
+                    and model:GetAttribute("Exploded") ~= true
+                then
+                    if encoded ~= bombAttribute then
+                        local success, decoded = pcall(HttpService.JSONDecode, HttpService, encoded)
+                        bombAttribute = encoded
+                        bombData = success and decoded or nil
+                    end
+                    local remaining = Counterblox.bombTimeRemaining(
+                        bombData,
+                        Workspace:GetServerTimeNow()
+                    )
+                    local distance = (camera.CFrame.Position - primaryPart.Position).Magnitude
+                    local presentation = Counterblox.bombPresentation(distance)
+                    bombObservation = {
+                        adornee = primaryPart,
+                        presentation = presentation,
+                        remaining = remaining,
+                        visible = remaining > 0 and presentation.visible,
+                    }
+                    break
+                end
+            end
+        end
+
+        if not settings.utilityEsp then
+            return bombObservation, utilities
+        end
+        for _, model in ipairs(tagged("Grenade")) do
+            local primaryPart = model.PrimaryPart
+            if primaryPart and model:GetAttribute("SimulationFinished") ~= true then
+                local distance = (camera.CFrame.Position - primaryPart.Position).Magnitude
+                if distance <= UTILITY_MAX_DISTANCE then
+                    local label, tone = Counterblox.utilityLabel(model:GetAttribute("GrenadeName"))
+                    local screenPosition, onScreen = projectPosition(camera, primaryPart.Position)
+                    table.insert(utilities, {
+                        key = model,
+                        label = label,
+                        onScreen = onScreen,
+                        polygons = {},
+                        screenPosition = screenPosition,
+                        tone = tone,
+                    })
+                end
+            end
+        end
+
+        local debris = Workspace:FindFirstChild("Debris")
+        if debris then
+            for _, child in ipairs(debris:GetChildren()) do
+                local observation
+                if string.sub(child.Name, 1, 10) == "VoxelFire_" then
+                    observation = zoneObservation(camera, child, "FIRE ZONE", "danger", true)
+                elseif string.sub(child.Name, 1, 11) == "VoxelSmoke_" then
+                    observation = zoneObservation(camera, child, "SMOKE", "smoke", false)
+                end
+                if observation then
+                    table.insert(utilities, observation)
+                end
+            end
+        end
+        return bombObservation, utilities
+    end
+
+    local function equippedGunComponent()
         local activeWeapon = store:Get().activeWeapon
         if not activeWeapon then
             return nil
@@ -1086,10 +1443,15 @@ function Counterblox.new(context)
                 and component.Bullet
                 and component.Bullet.Properties
             then
-                return component.Bullet
+                return component
             end
         end
         return nil
+    end
+
+    local function equippedGunBullet()
+        local component = equippedGunComponent()
+        return component and component.Bullet or nil
     end
 
     local function penetrationAccepted(target)
@@ -1132,7 +1494,7 @@ function Counterblox.new(context)
             return
         end
 
-        currentTarget = target
+        currentTarget = Counterblox.applyAimRates(target, settings, random)
         nextTriggerAt = os.clock() + 0.1
         click()
     end
@@ -1149,11 +1511,44 @@ function Counterblox.new(context)
         return character, humanoid, character:FindFirstChild("HumanoidRootPart")
     end
 
+    local function runRapidFire()
+        local settings = store:Get().settings
+        if not settings.rapidFire
+            or activeWeaponKind ~= "Gun"
+            or context.isInputCaptured()
+            or os.clock() < nextRapidFireAt
+        then
+            return
+        end
+
+        local weapon = equippedGunComponent()
+        local fireHeld = context.isFireHeld
+            and context.isFireHeld()
+            or weapon and weapon.IsFireHeld
+        if not weapon
+            or weapon.IsDestroyed
+            or not weapon.IsEquipped
+            or not fireHeld
+            or weapon.IsReloading
+            or (type(weapon.Rounds) == "number" and weapon.Rounds <= 0)
+        then
+            return
+        end
+
+        if weapon.ShootDelayThread then
+            cancelThread(weapon.ShootDelayThread)
+        end
+        weapon.ShootDelayThread = nil
+        weapon.IsShooting = false
+        weapon.NextShotDue = nil
+        nextRapidFireAt = os.clock() + RAPID_FIRE_INTERVAL
+        press()
+    end
+
     local function runKnifeAura()
         local settings = store:Get().settings
         if not settings.knifeAura
             or activeWeaponKind ~= "Knife"
-            or context.isInputCaptured()
             or os.clock() < nextAuraAt
         then
             return
@@ -1164,15 +1559,26 @@ function Counterblox.new(context)
             return true
         end
 
-        local target = selectTarget(false)
-        if not target or not targetVisible(target) then
+        local camera = Workspace.CurrentCamera
+        if not camera then
             return true
         end
-
-        local offset = target.position - root.CFrame.Position
-        local distance = offset.Magnitude
-        if distance > meleeRange then
-            if not settings.microStep or distance > meleeRange + KNIFE_EXTRA_REACH then
+        local target = Counterblox.nearestMeleeTarget(root.CFrame.Position, observations)
+        if not target then
+            return true
+        end
+        local plan = Counterblox.planMeleeAttack(
+            camera.CFrame.Position,
+            root.CFrame.Position,
+            target,
+            meleeRange
+        )
+        local targetRoot = target.character and target.character:FindFirstChild("HumanoidRootPart")
+        local offset = (targetRoot and targetRoot.Position or target.position) - root.CFrame.Position
+        local distance = plan.distance
+        local attackRange = meleeRange + KNIFE_HIT_TOLERANCE
+        if not plan.inRange then
+            if not settings.microStep or distance > attackRange + KNIFE_EXTRA_REACH then
                 return true
             end
 
@@ -1183,14 +1589,22 @@ function Counterblox.new(context)
             then
                 return true
             end
-            local stepDistance = math.min(KNIFE_MICRO_STEP, distance - meleeRange)
+            local stepDistance = math.min(KNIFE_MICRO_STEP, distance - attackRange)
             root.CFrame = root.CFrame + horizontal.Unit * stepDistance
             return true
         end
 
         currentTarget = target
         nextAuraAt = os.clock() + KNIFE_AURA_INTERVAL
-        click()
+        store:Patch({
+            lastShot = plan.heavy and "Auto backstab" or "Knife Aura",
+            target = target.player,
+        })
+        if plan.heavy then
+            heavyClick()
+        else
+            click()
+        end
         return true
     end
 
@@ -1271,15 +1685,11 @@ function Counterblox.new(context)
             end
             if moveDirection.Magnitude > 0.001 then
                 local direction = moveDirection.Unit
-                local speed = bhopMomentum.Magnitude
                 local acceleration = math.min(
                     math.max(humanoid.WalkSpeed - bhopMomentum:Dot(direction), 0),
                     humanoid.WalkSpeed * BHOP_AIR_ACCELERATION * (deltaTime or 0)
                 )
                 local steered = bhopMomentum + direction * acceleration
-                if speed > 0.001 and steered.Magnitude < speed then
-                    steered = steered.Unit * speed
-                end
                 if steered.Magnitude > bhopSpeedLimit then
                     steered = steered.Unit * bhopSpeedLimit
                 end
@@ -1339,14 +1749,20 @@ function Counterblox.new(context)
         publishCosmetics(cosmeticWeapon)
         publishGloves()
         local visibleCount = updateObservations()
+        local bombObservation, utilityObservations = updateWorldObservations(settings)
         store:Patch({
             activeWeapon = activeWeapon,
             activeWeaponKind = activeWeaponKind,
+            bombObservation = bombObservation,
             cosmeticWeapon = cosmeticWeapon,
             observations = observations,
+            utilityObservations = {
+                count = #utilityObservations,
+            },
             status = ("%d enemies · %d visible"):format(#observations, visibleCount),
         })
-        context.render(observations, UserInputService:GetMouseLocation())
+        context.render(observations, UserInputService:GetMouseLocation(), utilityObservations)
+        runRapidFire()
         if not runKnifeAura() then
             runTriggerBot()
         end
@@ -1381,25 +1797,7 @@ function Counterblox.new(context)
         restoreFunction(hooks.bulletTarget)
     end
 
-    self.capabilities = {
-        "silentAim",
-        "triggerBot",
-        "wallbang",
-        "knifeAura",
-        "microStep",
-        "spinBot",
-        "bhop",
-        "noSpread",
-        "noRecoil",
-        "noFlash",
-        "noSmoke",
-        "noWeaponSlow",
-        "boxes",
-        "chams",
-        "names",
-        "health",
-        "weapon",
-    }
+    self.capabilities = Counterblox.capabilities
     self.classify = Counterblox.classifyWeapon
     self.isOpponent = isOpponent
     self.selectTarget = selectTarget
