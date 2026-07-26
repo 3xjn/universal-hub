@@ -1,8 +1,6 @@
 local ShotPresentation = {}
 ShotPresentation.__index = ShotPresentation
 
-local nextBindingID = 0
-
 local function maskedFrame(targetFrame, visibleFrame)
     return CFrame.new(targetFrame.Position) * visibleFrame.Rotation
 end
@@ -15,8 +13,6 @@ function ShotPresentation.new(options)
     assert(options.hookFunction, "RIVALS Shot Aim requires hookfunction")
     assert(options.restoreFunction, "RIVALS Shot Aim requires restorefunction")
 
-    nextBindingID += 1
-    local bindingSuffix = tostring(nextBindingID)
     local self = setmetatable({
         cameraController = options.cameraController,
         cameraDataOriginal = nil,
@@ -35,8 +31,6 @@ function ShotPresentation.new(options)
         maskedFrame = nil,
         pendingTarget = nil,
         pendingRotation = nil,
-        postBinding = "UniversalHubShotPresentationPost" .. bindingSuffix,
-        preBinding = "UniversalHubShotPresentationPre" .. bindingSuffix,
         presentedTarget = nil,
         restoreFunction = options.restoreFunction,
         runService = options.runService,
@@ -47,6 +41,9 @@ function ShotPresentation.new(options)
         visibleRotation = nil,
         workspace = options.workspace,
     }, ShotPresentation)
+    local bindingSuffix = tostring(self):gsub("[^%w]", "")
+    self.postBinding = "UniversalHubShotPresentationPost" .. bindingSuffix
+    self.preBinding = "UniversalHubShotPresentationPre" .. bindingSuffix
 
     local rotationDeltaSignal = self.cameraController.RotationDeltaApplied
     if rotationDeltaSignal and type(rotationDeltaSignal.Connect) == "function" then
