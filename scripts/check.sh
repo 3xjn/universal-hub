@@ -31,6 +31,7 @@ luau-lsp analyze \
     modules/Store.lua \
     modules/Config.lua \
     modules/InputCapture.lua \
+    modules/MenuToggle.lua \
     modules/Registry.lua \
     modules/Session.lua \
     modules/Overlay.lua \
@@ -50,10 +51,12 @@ lune run tests/hub_loader_contracts.luau
 lune run tests/local_loader_contracts.luau
 lune run tests/config_contracts.luau
 lune run tests/input_capture_contracts.luau
+lune run tests/menu_toggle_contracts.luau
 lune run tests/registry_contracts.luau
 lune run tests/session_contracts.luau
 lune run tests/overlay_contracts.luau
 lune run tests/counterblox_adapter_contracts.luau
 lune run tests/rivals_combat_state_contracts.luau
 lune run tests/rivals_adapter_contracts.luau
+lune run tests/shot_presentation_binding_contracts.luau
 printf 'universal-hub-check-ok\n'

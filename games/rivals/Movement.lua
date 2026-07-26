@@ -21,6 +21,7 @@ function Movement.new(options)
         mechanicsController = options.mechanicsController,
         movement = nil,
         movementDirection = options.movementDirection,
+        shouldSuppressJump = options.shouldSuppressJump,
         spawn = options.spawn or task.spawn,
         syntheticInputs = {},
         userInputService = options.userInputService,
@@ -99,12 +100,23 @@ function Movement:_advance(fighter)
         if self.mechanicsController.IsSliding == true
             or readState("IsSlidingLocally", false)
         then
+            movement.slideWaitFrames = 0
             movement.slideFrames += 1
             if movement.slideFrames >= 2 then
+                if self.shouldSuppressJump and self.shouldSuppressJump() then
+                    self:_toggleInput(Enum.KeyCode.Space, false)
+                    return
+                end
                 self:_toggleInput(Enum.KeyCode.Space, true)
                 movement.ownsSlide = false
                 self.mechanicsController:HighJump()
                 movement.phase = "jump"
+            end
+        else
+            movement.slideWaitFrames += 1
+            if movement.slideWaitFrames >= 3 then
+                movement.ownsSlide = false
+                movement.phase = "waitingSlide"
             end
         end
     else
@@ -116,6 +128,7 @@ function Movement:_advance(fighter)
             self:_toggleInput(Enum.KeyCode.C, true)
             movement.phase = "sliding"
             movement.slideFrames = 0
+            movement.slideWaitFrames = 0
             movement.ownsSlide = true
             self.spawn(function()
                 self.mechanicsController:Slide()
@@ -157,6 +170,7 @@ function Movement:update()
             fighter = fighter,
             phase = "waitingSlide",
             slideFrames = 0,
+            slideWaitFrames = 0,
         }
     end
     self:_advance(fighter)

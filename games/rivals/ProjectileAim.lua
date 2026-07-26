@@ -223,6 +223,18 @@ local function traceProjectile(origin, direction, speed, acceleration, flightTim
     return nil
 end
 
+local function clearBlastToTarget(impact, target, raycast)
+    local displacement = target - impact
+    if displacement.Magnitude <= RICOCHET_SURFACE_OFFSET then
+        return true
+    end
+    return clearToTarget(
+        impact + displacement.Unit * RICOCHET_SURFACE_OFFSET,
+        target,
+        raycast
+    )
+end
+
 local function observationVelocity(observation)
     local part = observation and observation.part
     local velocity = part and (part.AssemblyLinearVelocity or part.Velocity)
@@ -235,16 +247,41 @@ local function observationVelocity(observation)
     return root and (root.AssemblyLinearVelocity or root.Velocity) or Vector3.zero
 end
 
+local function directionFrame(origin, direction)
+    local reference = math.abs(direction:Dot(Vector3.yAxis)) < 0.999
+            and Vector3.yAxis
+        or Vector3.xAxis
+    local right = direction:Cross(reference).Unit
+    local up = right:Cross(direction).Unit
+
+    return CFrame.fromMatrix(origin, right, up, -direction)
+end
+
 local function projectileLaunchOrigin(cameraOrigin, direction, info)
     local spawnOffset = info and info.ProjectileSpawnOffset
     if typeof(spawnOffset) ~= "CFrame" or direction.Magnitude <= 1e-6 then
         return cameraOrigin
     end
 
-    return (CFrame.lookAt(cameraOrigin, cameraOrigin + direction) * spawnOffset).Position
+    return (directionFrame(cameraOrigin, direction) * spawnOffset).Position
 end
 
-function ProjectileAim.solveProjectileAim(origin, observation, info, worldGravity)
+local function projectileCameraDirection(projectileDirection, info)
+    local spawnOffset = info and info.ProjectileSpawnOffset
+    if typeof(spawnOffset) ~= "CFrame"
+        or spawnOffset.Rotation == CFrame.identity
+        or projectileDirection.Magnitude <= 1e-6
+    then
+        return projectileDirection
+    end
+
+    return (
+        directionFrame(Vector3.zero, projectileDirection)
+        * spawnOffset.Rotation:Inverse()
+    ).LookVector
+end
+
+function ProjectileAim.solveProjectileAim(origin, observation, info, worldGravity, launchDelay)
     local targetPosition = observation and observation.position
     local speed = info and info.ProjectileSpeed
     if not targetPosition or type(speed) ~= "number" or speed <= 0 then
@@ -254,29 +291,42 @@ function ProjectileAim.solveProjectileAim(origin, observation, info, worldGravit
     local targetVelocity = observationVelocity(observation)
     local gravity = (worldGravity or 196.2) * (info.ProjectileGravity or 0)
     local lifetime = type(info.ProjectileLifetime) == "number" and info.ProjectileLifetime or math.huge
-    local predictedPosition = targetPosition
+    local delay = math.clamp(
+        type(launchDelay) == "number" and launchDelay or 0,
+        0,
+        0.25
+    )
+    local predictedPosition = targetPosition + targetVelocity * delay
     local launchOrigin = origin
     local direction
     local flightTime
 
     for _ = 1, 6 do
-        direction, flightTime = ballisticDirection(launchOrigin, predictedPosition, speed, gravity)
-        if not direction or not flightTime or flightTime > lifetime then
+        local projectileDirection
+        projectileDirection, flightTime =
+            ballisticDirection(launchOrigin, predictedPosition, speed, gravity)
+        if not projectileDirection or not flightTime or flightTime > lifetime then
             return nil
         end
-        predictedPosition = targetPosition + targetVelocity * flightTime
+        predictedPosition = targetPosition + targetVelocity * (delay + flightTime)
+        direction = projectileCameraDirection(projectileDirection, info)
         launchOrigin = projectileLaunchOrigin(origin, direction, info)
     end
 
-    direction, flightTime = ballisticDirection(launchOrigin, predictedPosition, speed, gravity)
-    if not direction or not flightTime or flightTime > lifetime then
+    local projectileDirection
+    projectileDirection, flightTime =
+        ballisticDirection(launchOrigin, predictedPosition, speed, gravity)
+    if not projectileDirection or not flightTime or flightTime > lifetime then
         return nil
     end
+    direction = projectileCameraDirection(projectileDirection, info)
+    launchOrigin = projectileLaunchOrigin(origin, direction, info)
     return {
         direction = direction,
         flightTime = flightTime,
         launchOrigin = launchOrigin,
         predictedPosition = predictedPosition,
+        projectileDirection = projectileDirection,
     }
 end
 
@@ -367,7 +417,11 @@ function ProjectileAim.solveSplashAim(origin, observation, info, raycast, worldG
             )
             local targetAtImpact = impactTime
                 and targetPosition + velocity * (impactTime + latency)
-            if impact and targetAtImpact and (impact - targetAtImpact).Magnitude <= radius then
+            if impact
+                and targetAtImpact
+                and (impact - targetAtImpact).Magnitude <= radius
+                and clearBlastToTarget(impact, targetAtImpact, raycast)
+            then
                 return {
                     direction = direction,
                     flightTime = impactTime,
@@ -379,6 +433,36 @@ function ProjectileAim.solveSplashAim(origin, observation, info, raycast, worldG
     end
 
     return nil
+end
+
+function ProjectileAim.isSplashSolutionCurrent(origin, solution, info, raycast, worldGravity)
+    local speed = info and info.ProjectileSpeed
+    local impact = solution and solution.impact
+    local flightTime = solution and solution.flightTime
+    if not impact
+        or not solution.direction
+        or not solution.predictedPosition
+        or type(speed) ~= "number"
+        or speed <= 0
+        or type(flightTime) ~= "number"
+        or flightTime <= 0
+    then
+        return false
+    end
+
+    local gravity = (worldGravity or 196.2) * (info.ProjectileGravity or 0)
+    local currentImpact = traceProjectile(
+        origin,
+        solution.direction,
+        speed,
+        Vector3.new(0, -gravity, 0),
+        flightTime + 1e-3,
+        raycast
+    )
+    return currentImpact
+        and (currentImpact - impact).Magnitude <= RICOCHET_SURFACE_OFFSET
+        and clearBlastToTarget(currentImpact, solution.predictedPosition, raycast)
+        or false
 end
 
 local function distanceToSegment(point, segmentStart, segmentEnd)

@@ -1,5 +1,6 @@
 local Targeting = {}
 
+local BODY_PART_NAMES = { "UpperTorso", "Torso", "LowerTorso", "HumanoidRootPart" }
 local HEAD_CROWN_FRACTIONS = { 0.45, 0.35, 0.25 }
 
 local function observationKey(observation)
@@ -97,6 +98,39 @@ function Targeting.visibleHeadPoint(observation, origin, raycast)
     return nil, head
 end
 
+function Targeting.visibleBodyPoint(observation, origin, raycast)
+    local character = observation and observation.character
+    if not character or not character.FindFirstChild then
+        return nil, nil
+    end
+
+    for _, partName in ipairs(BODY_PART_NAMES) do
+        local part = character:FindFirstChild(partName)
+        local position = part and part.Position
+        if position then
+            if not origin or type(raycast) ~= "function" then
+                return position, part
+            end
+
+            local result = raycast(origin, position - origin)
+            local instance = result and result.Instance
+            local critical = instance
+                and (instance.Name == "Head"
+                    or instance.GetAttribute
+                        and instance:GetAttribute("IsCritical") == true)
+            if not instance
+                or instance == part
+                or not critical
+                    and instance.IsDescendantOf
+                    and instance:IsDescendantOf(character)
+            then
+                return position, part
+            end
+        end
+    end
+    return nil, nil
+end
+
 function Targeting.applyAimRates(observation, settings, random, options)
     if not observation or not observation.position then
         return observation
@@ -119,25 +153,43 @@ function Targeting.applyAimRates(observation, settings, random, options)
         return result
     end
 
+    local character = observation.character
+    local head = character
+        and character.FindFirstChild
+        and character:FindFirstChild("Head")
     local headshotRate = math.clamp(settings.headshotRate or 0, 0, 100)
-    if headshotRate > 0 and random() * 100 < headshotRate then
-        local character = observation.character
-        local head = character and character:FindFirstChild("Head")
-        if head then
-            local result = table.clone(observation)
-            result.intentionalMiss = false
-            result.preferHead = true
-            local position = Targeting.visibleHeadPoint(
-                observation,
-                options and options.origin,
-                options and options.raycast
-            )
-            if position then
-                result.part = head
-                result.position = position
-            end
+    if head and headshotRate > 0 and random() * 100 < headshotRate then
+        local result = table.clone(observation)
+        result.intentionalMiss = false
+        result.preferHead = true
+        local position = Targeting.visibleHeadPoint(
+            observation,
+            options and options.origin,
+            options and options.raycast
+        )
+        if position then
+            result.part = head
+            result.position = position
             return result
         end
+    end
+
+    local bodyPosition, bodyPart = Targeting.visibleBodyPoint(
+        observation,
+        options and options.origin,
+        options and options.raycast
+    )
+    if bodyPosition and bodyPart then
+        if observation.part == bodyPart and observation.position == bodyPosition then
+            return observation
+        end
+
+        local result = table.clone(observation)
+        result.intentionalMiss = false
+        result.preferHead = false
+        result.part = bodyPart
+        result.position = bodyPosition
+        return result
     end
 
     return observation

@@ -5,7 +5,7 @@ local sourceBaseUrl = assert(
     "Set UniversalHubConfig.SourceBaseUrl to the raw universal-hub source root"
 )
 type HttpGame = typeof(game) & {
-    HttpGet: (self: typeof(game), url: string) -> string,
+    HttpGet: (self: typeof(game), url: string, noCache: boolean?) -> string,
 }
 local httpGame = game :: HttpGame
 
@@ -18,7 +18,7 @@ if not environment.oh or not environment.oh.drawing or not environment.oh.target
 
     local hydroxideUrl = configuration.HydroxideUrl
         or "https://raw.githubusercontent.com/3xjn/hydroxide/dev/init.lua"
-    local hydroxideSource = httpGame:HttpGet(hydroxideUrl)
+    local hydroxideSource = httpGame:HttpGet(hydroxideUrl, true)
     local hydroxideChunk, hydroxideError = loadstring(hydroxideSource, "hydroxide/init.lua")
     assert(hydroxideChunk, hydroxideError)()
 end
@@ -28,6 +28,7 @@ for _, path in ipairs({
     "modules/Store.lua",
     "modules/Config.lua",
     "modules/InputCapture.lua",
+    "modules/MenuToggle.lua",
     "modules/Registry.lua",
     "modules/Session.lua",
     "modules/Overlay.lua",
@@ -41,7 +42,7 @@ for _, path in ipairs({
     "games/rivals/Movement.lua",
     "games/rivals/CombatState.lua",
 }) do
-    sources[path] = httpGame:HttpGet(sourceBaseUrl .. path)
+    sources[path] = httpGame:HttpGet(sourceBaseUrl .. path, true)
 end
 environment.UniversalHubConfig = configuration
 configuration.Import = function(path)
@@ -50,6 +51,6 @@ configuration.Import = function(path)
     return assert(chunk, compileError)()
 end
 
-local initSource = httpGame:HttpGet(sourceBaseUrl .. "init.lua")
+local initSource = httpGame:HttpGet(sourceBaseUrl .. "init.lua", true)
 local initChunk, initError = loadstring(initSource, "init.lua")
 return assert(initChunk, initError)()
