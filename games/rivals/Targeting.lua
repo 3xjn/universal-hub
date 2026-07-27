@@ -2,6 +2,13 @@ local Targeting = {}
 
 local BODY_PART_NAMES = { "UpperTorso", "Torso", "LowerTorso", "HumanoidRootPart" }
 local HEAD_CROWN_FRACTIONS = { 0.45, 0.35, 0.25 }
+local HEAD_HITBOX_NAMES = { "HitboxHead", "HitboxHeadSmall" }
+local HEAD_RAY_HIT_NAMES = {
+    Head = true,
+    HitboxHead = true,
+    HitboxHeadSmall = true,
+    PhysicalHitboxHead = true,
+}
 
 local function observationKey(observation)
     return observation
@@ -62,9 +69,23 @@ end
 
 function Targeting.visibleHeadPoint(observation, origin, raycast)
     local character = observation and observation.character
-    local head = character
+    local visualHead = character
         and character.FindFirstChild
         and character:FindFirstChild("Head")
+    local head
+    if character and character.FindFirstChild then
+        for _, name in ipairs(HEAD_HITBOX_NAMES) do
+            local candidate = character:FindFirstChild(name, true)
+            if candidate
+                and candidate.GetAttribute
+                and candidate:GetAttribute("IsCritical") == true
+            then
+                head = candidate
+                break
+            end
+        end
+    end
+    head = head or visualHead
     if not head then
         return nil, nil
     end
@@ -80,8 +101,9 @@ function Targeting.visibleHeadPoint(observation, origin, raycast)
         end
         return instance.IsDescendantOf
             and instance:IsDescendantOf(character)
-            and instance.GetAttribute
-            and instance:GetAttribute("IsCritical") == true
+            and (HEAD_RAY_HIT_NAMES[instance.Name] == true
+                or instance.GetAttribute
+                    and instance:GetAttribute("IsCritical") == true)
     end
 
     if exposed(head.Position) then
@@ -158,17 +180,20 @@ function Targeting.applyAimRates(observation, settings, random, options)
         and character.FindFirstChild
         and character:FindFirstChild("Head")
     local headshotRate = math.clamp(settings.headshotRate or 0, 0, 100)
-    if head and headshotRate > 0 and random() * 100 < headshotRate then
+    local preferHead = head
+        and headshotRate > 0
+        and random() * 100 < headshotRate
+    if preferHead then
         local result = table.clone(observation)
         result.intentionalMiss = false
         result.preferHead = true
-        local position = Targeting.visibleHeadPoint(
+        local position, targetHead = Targeting.visibleHeadPoint(
             observation,
             options and options.origin,
             options and options.raycast
         )
         if position then
-            result.part = head
+            result.part = targetHead
             result.position = position
             return result
         end
@@ -186,7 +211,7 @@ function Targeting.applyAimRates(observation, settings, random, options)
 
         local result = table.clone(observation)
         result.intentionalMiss = false
-        result.preferHead = false
+        result.preferHead = preferHead == true
         result.part = bodyPart
         result.position = bodyPosition
         return result

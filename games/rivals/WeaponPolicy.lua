@@ -2,9 +2,15 @@ local WeaponPolicy = {}
 
 local AUTOMATIC_SHOOT_COOLDOWN = 0.15
 local CROUCH_SPREAD_MULTIPLIER = 0.75
-local SNIPER_NOSCOPE_MIN_HIT_CHANCE = 0.5
+local SNIPER_NOSCOPE_MIN_HIT_CHANCE = 0.4
 local TRIGGER_DAMAGE_RETENTION = 0.9
 local TRIGGER_INTERVAL = 0.1
+local NATIVE_HEAD_PROXY_NAMES = {
+    Head = true,
+    HitboxHead = true,
+    HitboxHeadSmall = true,
+    PhysicalHitboxHead = true,
+}
 local DEFAULT_AUTOMATION_POLICY = {
     cameraAim = true,
     silentAim = true,
@@ -71,6 +77,24 @@ function WeaponPolicy.itemLabel(item)
         tostring(math.floor(math.max(0, current))),
         tostring(maximum)
     )
+end
+
+function WeaponPolicy.isCriticalPart(part)
+    if not part then
+        return false
+    end
+
+    if NATIVE_HEAD_PROXY_NAMES[part.Name] == true then
+        return true
+    end
+
+    local getAttribute = part.GetAttribute
+    if type(getAttribute) ~= "function" then
+        return false
+    end
+
+    local succeeded, isCritical = pcall(getAttribute, part, "IsCritical")
+    return succeeded and isCritical == true
 end
 
 function WeaponPolicy.backstabPlan(localPosition, observation, info, acquisitionDistance)
@@ -160,6 +184,13 @@ function WeaponPolicy.adsSettled(cameraController, item)
         return true
     end
 
+    if type(item.IsFullyAiming) == "function" then
+        local succeeded, fullyAiming = pcall(item.IsFullyAiming, item)
+        if succeeded then
+            return fullyAiming == true
+        end
+    end
+
     local spring = cameraController._fov_weapons_spring
     return spring ~= nil
         and type(spring.Value) == "number"
@@ -167,7 +198,14 @@ function WeaponPolicy.adsSettled(cameraController, item)
         and math.abs(spring.Value - spring.Target) <= 0.5
 end
 
-function WeaponPolicy.sniperTriggerReady(cameraController, item, observation, distance, crouching)
+function WeaponPolicy.sniperTriggerReady(
+    cameraController,
+    item,
+    observation,
+    distance,
+    crouching,
+    forceScoped
+)
     if WeaponPolicy.itemName(item) ~= "Sniper" then
         return true
     end
@@ -177,13 +215,10 @@ function WeaponPolicy.sniperTriggerReady(cameraController, item, observation, di
     if type(info) ~= "table" or type(data) ~= "table" then
         return false
     end
+    if forceScoped == true then
+        return type(info.AimScopePercent) == "number" and info.AimScopePercent > 0
+    end
     if data.IsAiming == true then
-        if type(item.IsFullyAiming) == "function" then
-            local succeeded, fullyAiming = pcall(item.IsFullyAiming, item)
-            if succeeded then
-                return fullyAiming == true
-            end
-        end
         return WeaponPolicy.adsSettled(cameraController, item)
     end
 
@@ -394,7 +429,7 @@ function WeaponPolicy.damageAtDistance(item, observation, distance)
     local minimumMultiplier =
         info and (info.DamageFallOffMultiplier or info.RaycastDamageDropoffMultiplier)
     local part = observation and observation.part
-    local baseDamage = part and part.Name == "Head" and info and info.CriticalDamage
+    local baseDamage = WeaponPolicy.isCriticalPart(part) and info and info.CriticalDamage
         or info and info.ShootDamage
     if type(baseDamage) ~= "number" then
         return nil
@@ -432,7 +467,7 @@ function WeaponPolicy.triggerDamageReady(item, observation, distance)
     end
 
     local part = observation and observation.part
-    local baseDamage = part and part.Name == "Head" and info.CriticalDamage or info.ShootDamage
+    local baseDamage = WeaponPolicy.isCriticalPart(part) and info.CriticalDamage or info.ShootDamage
     local damage = WeaponPolicy.damageAtDistance(item, observation, distance)
     local health = observation and observation.health
     return type(baseDamage) == "number"
@@ -450,7 +485,7 @@ function WeaponPolicy.bowChargeTime(item, observation)
     end
 
     local part = observation and observation.part
-    local baseDamage = part and part.Name == "Head" and info.CriticalDamage or info.ShootDamage
+    local baseDamage = WeaponPolicy.isCriticalPart(part) and info.CriticalDamage or info.ShootDamage
     local health = observation and observation.health
     if type(baseDamage) ~= "number" or type(health) ~= "number" then
         return timestamps[#timestamps] or 0
@@ -475,7 +510,7 @@ function WeaponPolicy.bowQuickShotLethal(item, observation)
     end
 
     local part = observation and observation.part
-    local damage = part and part.Name == "Head" and info.CriticalDamage or info.ShootDamage
+    local damage = WeaponPolicy.isCriticalPart(part) and info.CriticalDamage or info.ShootDamage
     local health = observation and observation.health
     if type(damage) ~= "number" or type(health) ~= "number" or damage < health then
         return false

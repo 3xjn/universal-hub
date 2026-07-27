@@ -37,6 +37,7 @@ for _, path in ipairs({
     "games/rivals/Targeting.lua",
     "games/rivals/ProjectileAim.lua",
     "games/rivals/ShotPresentation.lua",
+    "games/rivals/ScopedAccuracy.lua",
     "games/rivals/WeaponPolicy.lua",
     "games/rivals/Effects.lua",
     "games/rivals/Movement.lua",

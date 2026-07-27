@@ -111,6 +111,7 @@ local store = Store.new({
         noSpread = false,
         noWeaponSlow = false,
         rapidFire = false,
+        alwaysScoped = false,
         silentAim = false,
         spinBot = false,
         triggerBot = false,
@@ -887,6 +888,7 @@ local rivalsOverlay = Overlay.new({
     capabilities = {
         "aimSmoothness",
         "humanAim",
+        "alwaysScoped",
         "silentAim",
         "triggerBot",
         "headshotRate",
@@ -928,6 +930,10 @@ assert(
     "Game adapters must share the same composed Drawing shell and toggle primitives"
 )
 assert(rivalsOverlay.controls.options.triggerBot ~= nil)
+assert(
+    rivalsOverlay.controls.options.alwaysScoped.label.Text == "Always Scoped",
+    "RIVALS must expose the Always Scoped option"
+)
 assert(
     rivalsOverlay.controls.rates.aimSmoothness
         and rivalsOverlay.controls.rates.headshotRate
