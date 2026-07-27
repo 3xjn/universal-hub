@@ -30,6 +30,8 @@ assert(
     "Universal Hub requires the Hydroxide core to be loaded first"
 )
 
+local drawingControls = assert(oh.load, "Universal Hub requires Hydroxide helper loading")("controls")
+
 local previous = environment.UniversalHubSession
 if previous and type(previous.stop) == "function" then
     previous:stop()
@@ -205,6 +207,7 @@ overlay = Overlay.new({
         adapter:cycleGlove(direction)
     end,
     drawing = oh.drawing,
+    drawingControls = drawingControls,
     gameLabel = adapterDefinition.label,
     getCamera = function()
         return Workspace.CurrentCamera

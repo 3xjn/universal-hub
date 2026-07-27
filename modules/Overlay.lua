@@ -126,8 +126,8 @@ local UTILITY_CUBE_EDGES = {
 
 local BODY_CUBE_OPACITY = 0.18
 local CONTENT_WIDTH = 276
-local FOV_TRACK_WIDTH = 118
-local RATE_TRACK_WIDTH = 112
+local FOV_TRACK_WIDTH = 252
+local RATE_TRACK_WIDTH = 256
 local RATE_THUMB_RADIUS = 6
 local COSMETIC_WEAPON_CONTROLS = {
     weaponBackground = true,
@@ -164,6 +164,7 @@ end
 
 function Overlay.new(context)
     assert(context and context.drawing, "Hub overlay requires Hydroxide drawing helpers")
+    assert(context.drawingControls, "Hub overlay requires Hydroxide drawing controls")
     assert(context.store, "Hub overlay requires a reactive store")
 
     local optionAvailable = {}
@@ -224,6 +225,8 @@ function Overlay.new(context)
         }),
     }, Overlay)
 
+    self.drawingControls = context.drawingControls.new(self.surface)
+
     self:_build()
     self.immediateChams = pcall(function()
         self.chamPaintConnection = self.surface:paint(WORLD_LAYER.chams, function(renderer)
@@ -276,6 +279,7 @@ end
 
 function Overlay:_build()
     local surface = self.surface
+    local drawingControls = self.drawingControls
     local controls = self.controls
 
     controls.panelShadow = surface:create("Square", {
@@ -378,38 +382,26 @@ function Overlay:_build()
         Text = "Spectating",
         ZIndex = 202,
     })
-    controls.weaponSurface = surface:create("Square", {
-        Color = COLORS.elevated,
-        Filled = true,
-        Size = Vector2.new(CONTENT_WIDTH, 32),
-        Visible = true,
-        ZIndex = 201,
-    }, { pointerEvents = false })
-    controls.weaponBorder = surface:create("Square", {
-        Color = COLORS.border,
-        Filled = false,
-        Size = Vector2.new(CONTENT_WIDTH, 32),
-        Thickness = 1,
-        Transparency = 0.72,
-        Visible = true,
-        ZIndex = 202,
-    }, { pointerEvents = false })
-    controls.fovCard = surface:create("Square", {
-        Color = COLORS.elevated,
-        Filled = true,
-        Size = Vector2.new(CONTENT_WIDTH, 54),
-        Visible = true,
-        ZIndex = 201,
-    }, { pointerEvents = false })
-    controls.fovCardBorder = surface:create("Square", {
-        Color = COLORS.border,
-        Filled = false,
-        Size = Vector2.new(CONTENT_WIDTH, 54),
-        Thickness = 1,
-        Transparency = 0.72,
-        Visible = true,
-        ZIndex = 202,
-    }, { pointerEvents = false })
+    local weaponCard = drawingControls:card({
+        background = {
+            Color = COLORS.elevated, Filled = true, Size = Vector2.new(CONTENT_WIDTH, 32), Visible = true, ZIndex = 201,
+        },
+        border = {
+            Color = COLORS.border, Filled = false, Size = Vector2.new(CONTENT_WIDTH, 32), Thickness = 1, Transparency = 0.72, Visible = true, ZIndex = 202,
+        },
+    })
+    controls.weaponSurface = weaponCard.background
+    controls.weaponBorder = weaponCard.border
+    local fovCard = drawingControls:card({
+        background = {
+            Color = COLORS.elevated, Filled = true, Size = Vector2.new(CONTENT_WIDTH, 86), Visible = true, ZIndex = 201,
+        },
+        border = {
+            Color = COLORS.border, Filled = false, Size = Vector2.new(CONTENT_WIDTH, 86), Thickness = 1, Transparency = 0.72, Visible = true, ZIndex = 202,
+        },
+    })
+    controls.fovCard = fovCard.background
+    controls.fovCardBorder = fovCard.border
     controls.fovLabel = self:_text({
         Color = COLORS.text,
         Size = 14,
@@ -440,35 +432,16 @@ function Overlay:_build()
         local settings = self.context.store:Get().settings
         self.context.setOption("fullScreenAim", not settings.fullScreenAim)
     end)
-    controls.sliderHit = self:_capture(surface:create("Square", {
-        Color = COLORS.panel,
-        Filled = true,
-        Size = Vector2.new(FOV_TRACK_WIDTH, 28),
-        Transparency = 0,
-        Visible = true,
-        ZIndex = 202,
-    }))
-    controls.sliderTrack = surface:create("Square", {
-        Color = COLORS.border,
-        Filled = true,
-        Size = Vector2.new(FOV_TRACK_WIDTH, 4),
-        Visible = true,
-        ZIndex = 203,
-    }, { pointerEvents = false })
-    controls.sliderFill = surface:create("Square", {
-        Color = COLORS.accent,
-        Filled = true,
-        Visible = true,
-        ZIndex = 204,
-    }, { pointerEvents = false })
-    controls.sliderKnob = surface:create("Circle", {
-        Color = COLORS.text,
-        Filled = true,
-        NumSides = 32,
-        Radius = 7,
-        Visible = true,
-        ZIndex = 205,
-    }, { pointerEvents = false })
+    local fovSlider = drawingControls:slider({
+        hit = { Color = COLORS.panel, Filled = true, Size = Vector2.new(FOV_TRACK_WIDTH, 28), Transparency = 0, Visible = true, ZIndex = 202 },
+        track = { Color = COLORS.border, Filled = true, Size = Vector2.new(FOV_TRACK_WIDTH, 4), Visible = true, ZIndex = 203 },
+        fill = { Color = COLORS.accent, Filled = true, Visible = true, ZIndex = 204 },
+        knob = { Color = COLORS.text, Filled = true, NumSides = 32, Radius = 7, Visible = true, ZIndex = 205 },
+    })
+    controls.sliderHit = self:_capture(fovSlider.hit)
+    controls.sliderTrack = fovSlider.track
+    controls.sliderFill = fovSlider.fill
+    controls.sliderKnob = fovSlider.knob
     controls.fovCircle = surface:create("Circle", {
         Color = COLORS.accent,
         Filled = false,
@@ -487,54 +460,31 @@ function Overlay:_build()
                 background = surface:create("Square", {
                     Color = COLORS.elevated,
                     Filled = true,
-                    Size = Vector2.new(CONTENT_WIDTH, 32),
+                    Size = Vector2.new(CONTENT_WIDTH, 54),
                     Visible = true,
                     ZIndex = 201,
                 }, { pointerEvents = false }),
                 border = surface:create("Square", {
                     Color = COLORS.border,
                     Filled = false,
-                    Size = Vector2.new(CONTENT_WIDTH, 32),
+                    Size = Vector2.new(CONTENT_WIDTH, 54),
                     Thickness = 1,
                     Transparency = 0.72,
                     Visible = true,
                     ZIndex = 202,
                 }, { pointerEvents = false }),
-                fill = surface:create("Square", {
-                    Color = COLORS.accent,
-                    Filled = true,
-                    Visible = true,
-                    ZIndex = 204,
-                }, { pointerEvents = false }),
-                hit = self:_capture(surface:create("Square", {
-                    Color = COLORS.panel,
-                    Filled = true,
-                    Size = Vector2.new(RATE_TRACK_WIDTH, 28),
-                    Transparency = 0,
-                    Visible = true,
-                    ZIndex = 202,
-                })),
-                knob = surface:create("Circle", {
-                    Color = COLORS.text,
-                    Filled = true,
-                    NumSides = 32,
-                    Radius = RATE_THUMB_RADIUS,
-                    Visible = true,
-                    ZIndex = 205,
-                }, { pointerEvents = false }),
+                slider = drawingControls:slider({
+                    hit = { Color = COLORS.panel, Filled = true, Size = Vector2.new(RATE_TRACK_WIDTH, 28), Transparency = 0, Visible = true, ZIndex = 202 },
+                    track = { Color = COLORS.border, Filled = true, Size = Vector2.new(RATE_TRACK_WIDTH, 4), Visible = true, ZIndex = 203 },
+                    fill = { Color = COLORS.accent, Filled = true, Visible = true, ZIndex = 204 },
+                    knob = { Color = COLORS.text, Filled = true, NumSides = 32, Radius = RATE_THUMB_RADIUS, Visible = true, ZIndex = 205 },
+                }),
                 label = self:_text({
                     Color = COLORS.text,
                     Size = 13,
                     Text = definition.label,
                     ZIndex = 203,
                 }),
-                track = surface:create("Square", {
-                    Color = COLORS.border,
-                    Filled = true,
-                    Size = Vector2.new(RATE_TRACK_WIDTH, 4),
-                    Visible = true,
-                    ZIndex = 203,
-                }, { pointerEvents = false }),
                 value = self:_text({
                     Center = true,
                     Color = COLORS.secondary,
@@ -559,6 +509,10 @@ function Overlay:_build()
                     ZIndex = 203,
                 }, { pointerEvents = false }),
             }
+            control.hit = self:_capture(control.slider.hit)
+            control.track = control.slider.track
+            control.fill = control.slider.fill
+            control.knob = control.slider.knob
             local function setRate(point)
                 local alpha = math.clamp(
                     (point.X - control.hit.Position.X) / RATE_TRACK_WIDTH,
@@ -1177,16 +1131,16 @@ function Overlay:_layout()
     controls.fovCard.Position = Vector2.new(x + 12, y + 92)
     controls.fovCardBorder.Position = controls.fovCard.Position
     controls.fovLabel.Position = Vector2.new(x + 24, y + 102)
-    controls.fovAmount.Position = Vector2.new(x + 24, y + 122)
-    controls.fovModeButton.Position = Vector2.new(x + 218, y + 104)
-    controls.fovValue.Position = Vector2.new(x + 248, y + 112)
+    controls.fovAmount.Position = Vector2.new(x + 248, y + 102)
+    controls.fovModeButton.Position = Vector2.new(x + 24, y + 140)
+    controls.fovValue.Position = Vector2.new(x + 54, y + 145)
 
-    self.sliderStartX = x + 94
-    controls.sliderHit.Position = Vector2.new(self.sliderStartX, y + 104)
-    controls.sliderTrack.Position = Vector2.new(self.sliderStartX, y + 117)
+    self.sliderStartX = x + 24
+    controls.sliderHit.Position = Vector2.new(self.sliderStartX, y + 114)
+    controls.sliderTrack.Position = Vector2.new(self.sliderStartX, y + 127)
     controls.sliderFill.Position = controls.sliderTrack.Position
 
-    local sectionY = y + 150
+    local sectionY = y + 184
     local aimSection = controls.sections.rage
     if aimSection then
         aimSection.label.Position = Vector2.new(x + 12, sectionY)
@@ -1198,14 +1152,14 @@ function Overlay:_layout()
         if control then
             control.background.Position = Vector2.new(x + 12, sectionY)
             control.border.Position = control.background.Position
-            control.label.Position = Vector2.new(x + 22, sectionY + 10)
-            control.valueSurface.Position = Vector2.new(x + 234, sectionY + 4)
-            control.valueBorder.Position = control.valueSurface.Position
-            control.value.Position = Vector2.new(x + 255, sectionY + 8)
-            control.hit.Position = Vector2.new(x + 110, sectionY + 2)
-            control.track.Position = Vector2.new(x + 110, sectionY + 15)
+            control.label.Position = Vector2.new(x + 22, sectionY + 8)
+            control.valueSurface.Visible = false
+            control.valueBorder.Visible = false
+            control.value.Position = Vector2.new(x + 258, sectionY + 8)
+            control.hit.Position = Vector2.new(x + 22, sectionY + 22)
+            control.track.Position = Vector2.new(x + 22, sectionY + 35)
             control.fill.Position = control.track.Position
-            sectionY = sectionY + 36
+            sectionY = sectionY + 58
         end
     end
     for _, group in ipairs(OPTION_GROUPS) do

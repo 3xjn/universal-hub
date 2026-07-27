@@ -195,6 +195,26 @@ local overlay = Overlay.new({
             return true
         end,
     },
+    drawingControls = {
+        new = function(controlSurface)
+            return {
+                card = function(_, options)
+                    return {
+                        background = controlSurface:create("Square", options.background, { pointerEvents = false }),
+                        border = controlSurface:create("Square", options.border, { pointerEvents = false }),
+                    }
+                end,
+                slider = function(_, options)
+                    return {
+                        hit = controlSurface:create("Square", options.hit),
+                        track = controlSurface:create("Square", options.track),
+                        fill = controlSurface:create("Square", options.fill),
+                        knob = controlSurface:create("Circle", options.knob),
+                    }
+                end,
+            }
+        end,
+    },
     gameLabel = "Test Game",
     getCamera = function()
         return {
@@ -253,7 +273,7 @@ assert(
     overlay.controls.panelShadow.Position == overlay.controls.panel.Position + Vector2.new(5, 6)
         and overlay.controls.panelBorder.Position == overlay.controls.panel.Position
         and overlay.controls.weaponSurface.Size == Vector2.new(276, 32)
-        and overlay.controls.fovCard.Size == Vector2.new(276, 54),
+        and overlay.controls.fovCard.Size == Vector2.new(276, 86),
     "The shared Drawing shell must compose its own depth, frame, and full-width summary cards"
 )
 assert(
@@ -421,11 +441,11 @@ overlay.controls.sliderHit.callbacks.pointerdown(nil, Vector2.new(1280, 0))
 assert(fovChanges[1] == 500, "FOV pointer input must clamp through the slider")
 overlay.controls.rates.headshotRate.hit.callbacks.pointerdown(
     nil,
-    Vector2.new(overlay.controls.rates.headshotRate.hit.Position.X + 84, 0)
+    Vector2.new(overlay.controls.rates.headshotRate.hit.Position.X + 192, 0)
 )
 overlay.controls.rates.missRate.hit.callbacks.drag(
     nil,
-    Vector2.new(overlay.controls.rates.missRate.hit.Position.X + 28, 0)
+    Vector2.new(overlay.controls.rates.missRate.hit.Position.X + 64, 0)
 )
 assert(
     rateChanges[1].name == "headshotRate"
@@ -908,6 +928,26 @@ local rivalsOverlay = Overlay.new({
             return true
         end,
     },
+    drawingControls = {
+        new = function(controlSurface)
+            return {
+                card = function(_, options)
+                    return {
+                        background = controlSurface:create("Square", options.background, { pointerEvents = false }),
+                        border = controlSurface:create("Square", options.border, { pointerEvents = false }),
+                    }
+                end,
+                slider = function(_, options)
+                    return {
+                        hit = controlSurface:create("Square", options.hit),
+                        track = controlSurface:create("Square", options.track),
+                        fill = controlSurface:create("Square", options.fill),
+                        knob = controlSurface:create("Circle", options.knob),
+                    }
+                end,
+            }
+        end,
+    },
     gameLabel = "RIVALS",
     getCamera = function()
         return {
@@ -950,7 +990,7 @@ assert(
     "Adapters without cosmetics must omit the Counterblox cosmetics disclosure"
 )
 assert(
-    rivalsOverlay.controls.panel.Size.Y < 596,
+    rivalsOverlay.controls.panel.Size.Y < overlay.controls.panel.Size.Y,
     "Capability filtering must collapse the panel around the remaining controls"
 )
 rivalsOverlay:destroy()
