@@ -104,10 +104,11 @@ infer behavior from the setting name alone.
   points. A body part in front of the point is not a head hit; accept only
   target-descendant native head proxies or parts explicitly marked
   `IsCritical`.
-- Scoped Accuracy is opt-in and may only override the equipped item when it
+- Always Scoped is opt-in and may only override the equipped item when it
   exposes the common native `IsFullyAiming` seam and a positive numeric
   `AimScopePercent`. Keep normal ADS readiness on the native predicate; camera
-  FOV is fallback evidence only.
+  FOV is fallback evidence only. The stored setting and capability key is
+  `alwaysScoped`; the internal implementation module remains `ScopedAccuracy`.
 - Utility ESP classification is tag-first and must reject held/viewmodel/local
   copies. Tripmine renders as a 12-edge wireframe cube; generic utilities keep
   their compact marker.

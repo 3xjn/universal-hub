@@ -22,7 +22,7 @@ assert(
     table.find(Rivals.capabilities, "silentAim")
         and table.find(Rivals.capabilities, "shotAim")
         and table.find(Rivals.capabilities, "triggerBot")
-        and table.find(Rivals.capabilities, "scopedAccuracy")
+        and table.find(Rivals.capabilities, "alwaysScoped")
         and table.find(Rivals.capabilities, "humanAim")
         and table.find(Rivals.capabilities, "aimSmoothness")
         and table.find(Rivals.capabilities, "headshotRate")
@@ -551,7 +551,7 @@ assert(
 )
 assert(
     RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 30, false, true) == true,
-    "Scoped Accuracy must let Sniper Trigger Bot treat an eligible forced shot as scoped"
+    "Always Scoped must let Sniper Trigger Bot treat an eligible forced shot as scoped"
 )
 assert(
     RivalsWeaponPolicy.sniperTriggerReady(scopeCamera, sniper, sniperTarget, 6, false) == true,
@@ -2214,7 +2214,7 @@ local settings = {
     humanAim = false,
     missRate = 0,
     shotAim = false,
-    scopedAccuracy = false,
+    alwaysScoped = false,
     silentAim = true,
     triggerBot = false,
     utilityEsp = true,
@@ -2415,7 +2415,7 @@ local adapter = Rivals.new({
     rivalsTargeting = RivalsTargeting,
     projectileAim = RivalsProjectileAim,
     shotPresentation = RivalsShotPresentation,
-    scopedAccuracy = require("../games/rivals/ScopedAccuracy"),
+    alwaysScoped = require("../games/rivals/ScopedAccuracy"),
     weaponPolicy = RivalsWeaponPolicy,
     effects = RivalsEffects,
     movement = RivalsMovement,
@@ -3029,14 +3029,14 @@ assert(
     clicks == sniperClicks,
     "Adapter Trigger Bot must wait for an unreliable far unscoped Sniper shot"
 )
-settings.scopedAccuracy = true
+settings.alwaysScoped = true
 currentTime += 1
 renderCallback()
 assert(
     clicks == sniperClicks + 1,
-    "Scoped Accuracy must let Trigger Bot fire an eligible Sniper shot without user ADS"
+    "Always Scoped must let Trigger Bot fire an eligible Sniper shot without user ADS"
 )
-settings.scopedAccuracy = false
+settings.alwaysScoped = false
 sniperClicks = clicks
 
 observations[1].position = origin + Vector3.new(0, 0, -6)

@@ -10,10 +10,10 @@ local function eligibleItem(item)
 end
 
 function ScopedAccuracy.new(options)
-    assert(options and options.getFighter, "RIVALS Scoped Accuracy requires a fighter getter")
-    assert(options.hookFunction, "RIVALS Scoped Accuracy requires hookfunction")
-    assert(options.isEnabled, "RIVALS Scoped Accuracy requires an enabled predicate")
-    assert(options.restoreFunction, "RIVALS Scoped Accuracy requires restorefunction")
+    assert(options and options.getFighter, "RIVALS Always Scoped requires a fighter getter")
+    assert(options.hookFunction, "RIVALS Always Scoped requires hookfunction")
+    assert(options.isEnabled, "RIVALS Always Scoped requires an enabled predicate")
+    assert(options.restoreFunction, "RIVALS Always Scoped requires restorefunction")
 
     return setmetatable({
         getFighter = options.getFighter,

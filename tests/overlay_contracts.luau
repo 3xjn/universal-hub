@@ -111,7 +111,7 @@ local store = Store.new({
         noSpread = false,
         noWeaponSlow = false,
         rapidFire = false,
-        scopedAccuracy = false,
+        alwaysScoped = false,
         silentAim = false,
         spinBot = false,
         triggerBot = false,
@@ -888,7 +888,7 @@ local rivalsOverlay = Overlay.new({
     capabilities = {
         "aimSmoothness",
         "humanAim",
-        "scopedAccuracy",
+        "alwaysScoped",
         "silentAim",
         "triggerBot",
         "headshotRate",
@@ -931,8 +931,8 @@ assert(
 )
 assert(rivalsOverlay.controls.options.triggerBot ~= nil)
 assert(
-    rivalsOverlay.controls.options.scopedAccuracy.label.Text == "Scoped Accuracy",
-    "RIVALS must expose the generic scoped-shot accuracy option"
+    rivalsOverlay.controls.options.alwaysScoped.label.Text == "Always Scoped",
+    "RIVALS must expose the Always Scoped option"
 )
 assert(
     rivalsOverlay.controls.rates.aimSmoothness

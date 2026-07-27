@@ -27,7 +27,7 @@ local fighter = {
     EquippedItem = eligibleItem,
 }
 
-local scopedAccuracy = ScopedAccuracy.new({
+local alwaysScoped = ScopedAccuracy.new({
     getFighter = function()
         return fighter
     end,
@@ -44,21 +44,21 @@ local scopedAccuracy = ScopedAccuracy.new({
     end,
 })
 
-scopedAccuracy:refreshHook()
+alwaysScoped:refreshHook()
 local replacement = replacements[nativeIsFullyAiming]
 assert(type(replacement) == "function", "eligible equipped items must install the native scoped-state hook")
 assert(
     replacement(eligibleItem) == false and nativeCalls == 1,
-    "disabled Scoped Accuracy must preserve the native result"
+    "disabled Always Scoped must preserve the native result"
 )
 
 enabled = true
-assert(replacement(eligibleItem) == true, "enabled Scoped Accuracy must report an eligible shot as scoped")
+assert(replacement(eligibleItem) == true, "enabled Always Scoped must report an eligible shot as scoped")
 assert(
     eligibleItem.Data.IsAiming == false
         and eligibleItem.ViewModel.CurrentAimValue == 0
         and nativeCalls == 1,
-    "Scoped Accuracy must not mutate aim state or evaluate the native result when overriding it"
+    "Always Scoped must not mutate aim state or evaluate the native result when overriding it"
 )
 
 local differentItem = {
@@ -78,14 +78,14 @@ local ineligibleItem = {
     nativeFullyAiming = false,
 }
 fighter.EquippedItem = ineligibleItem
-scopedAccuracy:refreshHook()
+alwaysScoped:refreshHook()
 assert(
     restored[nativeIsFullyAiming] == 1 and replacements[nativeIsFullyAiming] == nil,
     "equipping an ineligible item must restore the previous eligible hook"
 )
 
 local ineligibleHooks = 0
-local ineligibleScopedAccuracy = ScopedAccuracy.new({
+local ineligibleAlwaysScoped = ScopedAccuracy.new({
     getFighter = function()
         return {
             EquippedItem = ineligibleItem,
@@ -100,22 +100,22 @@ local ineligibleScopedAccuracy = ScopedAccuracy.new({
     end,
     restoreFunction = function() end,
 })
-ineligibleScopedAccuracy:refreshHook()
+ineligibleAlwaysScoped:refreshHook()
 assert(ineligibleHooks == 0, "items without a positive numeric AimScopePercent must never be hooked")
-ineligibleScopedAccuracy:stop()
+ineligibleAlwaysScoped:stop()
 
 fighter.EquippedItem = eligibleItem
-scopedAccuracy:refreshHook()
+alwaysScoped:refreshHook()
 assert(type(replacements[nativeIsFullyAiming]) == "function")
-scopedAccuracy:stop()
-scopedAccuracy:stop()
+alwaysScoped:stop()
+alwaysScoped:stop()
 assert(
     restored[nativeIsFullyAiming] == 2 and replacements[nativeIsFullyAiming] == nil,
-    "stopping Scoped Accuracy must restore its hook exactly once"
+    "stopping Always Scoped must restore its hook exactly once"
 )
 assert(
     replacements[nativeIsFullyAiming] == nil,
-    "a stopped Scoped Accuracy instance must leave no callable override behind"
+    "a stopped Always Scoped instance must leave no callable override behind"
 )
 
 print("scoped-accuracy-contracts-ok")
