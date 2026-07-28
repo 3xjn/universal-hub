@@ -59,6 +59,7 @@ local OPTION_LABELS = {
     wallbang = "Wallbang",
     boxes = "Hitboxes",
     chams = "Chams",
+    plotCopy = "Plot Copy",
     names = "Names",
     health = "Health",
     humanAim = "Human Aim",
@@ -129,6 +130,8 @@ local CONTENT_WIDTH = 276
 local FOV_TRACK_WIDTH = 252
 local RATE_TRACK_WIDTH = 256
 local RATE_THUMB_RADIUS = 6
+local PLOT_OWNER_VALUE_LIMIT = 22
+local PLOT_SAVE_VALUE_LIMIT = 24
 local COSMETIC_WEAPON_CONTROLS = {
     weaponBackground = true,
     weaponName = true,
@@ -160,6 +163,14 @@ local function setVisible(nodes, visible)
             node.Visible = visible
         end
     end
+end
+
+local function compactText(value, limit)
+    value = tostring(value or "")
+    if #value <= limit then
+        return value
+    end
+    return value:sub(1, math.max(limit - 3, 0)) .. "..."
 end
 
 function Overlay.new(context)
@@ -197,7 +208,14 @@ function Overlay.new(context)
             end
         end
     end
+    local aimControlsSupported = optionAvailable.silentAim == true
+        or optionAvailable.shotAim == true
+        or optionAvailable.triggerBot == true
+        or rateAvailable.aimSmoothness == true
+        or rateAvailable.headshotRate == true
+        or rateAvailable.missRate == true
     local self = setmetatable({
+        aimControlsSupported = aimControlsSupported,
         captured = false,
         cosmeticsSupported = context.cosmetics ~= false,
         context = context,
@@ -208,6 +226,10 @@ function Overlay.new(context)
         optionAvailable = optionAvailable,
         optionSupport = optionSupport,
         optionLabels = context.optionLabels or {},
+        plotDropdownItems = {},
+        plotDropdownOpen = false,
+        plotSaveName = "",
+        selectedPlotOwner = nil,
         rateAvailable = rateAvailable,
         playerNodes = {},
         utilityNodes = {},
@@ -275,6 +297,306 @@ function Overlay:_text(properties, pointerEvents)
     return self.surface:create("Text", properties, {
         pointerEvents = pointerEvents == true,
     })
+end
+
+function Overlay:_reportPlotCopyError(message)
+    if self.context.reportPlotCopyError then
+        self.context.reportPlotCopyError(message)
+    end
+end
+
+function Overlay:_setPlotSaveName(saveName)
+    self.plotSaveName = tostring(saveName or "")
+    local controls = self.controls.plotCopy
+    if controls then
+        controls.saveValue.Text = self.plotSaveName == ""
+            and "Enter save name"
+            or compactText(self.plotSaveName, PLOT_SAVE_VALUE_LIMIT)
+        controls.saveValue.Color = self.plotSaveName == "" and COLORS.secondary or COLORS.text
+    end
+end
+
+function Overlay:_clearPlotDropdown()
+    for _, item in ipairs(self.plotDropdownItems) do
+        item.row:destroy()
+        item.label:destroy()
+    end
+    table.clear(self.plotDropdownItems)
+end
+
+function Overlay:_selectPlotOwner(ownerName)
+    local previousDefault = self.selectedPlotOwner
+        and ("copy_" .. self.selectedPlotOwner)
+        or ""
+    self.selectedPlotOwner = ownerName
+    local controls = self.controls.plotCopy
+    controls.ownerValue.Text = compactText(ownerName, PLOT_OWNER_VALUE_LIMIT)
+    controls.ownerValue.Color = COLORS.text
+    if self.plotSaveName == "" or self.plotSaveName == previousDefault then
+        self:_setPlotSaveName("copy_" .. ownerName)
+        if controls.saveInput then
+            controls.saveInput.Text = self.plotSaveName
+        end
+    end
+end
+
+function Overlay:_setPlotDropdownOpen(open)
+    local controls = self.controls.plotCopy
+    if not controls then
+        return
+    end
+
+    self:_clearPlotDropdown()
+    self.plotDropdownOpen = open == true
+    controls.ownerIndicator.Text = self.plotDropdownOpen and "^" or "v"
+    if not self.plotDropdownOpen then
+        return
+    end
+
+    local succeeded, owners = pcall(self.context.listPlotOwners)
+    if not succeeded or type(owners) ~= "table" or #owners == 0 then
+        self.plotDropdownOpen = false
+        controls.ownerIndicator.Text = "v"
+        controls.ownerValue.Text = "No player plots"
+        controls.ownerValue.Color = COLORS.danger
+        self:_reportPlotCopyError("No other player plots are available")
+        return
+    end
+
+    if not table.find(owners, self.selectedPlotOwner) then
+        self:_selectPlotOwner(owners[1])
+    end
+    for _, ownerName in ipairs(owners) do
+        local row = self:_interactive(self.surface:create("Square", {
+            Color = ownerName == self.selectedPlotOwner and COLORS.accentSurface or COLORS.elevated,
+            Filled = true,
+            Size = Vector2.new(CONTENT_WIDTH, 26),
+            Visible = true,
+            ZIndex = 212,
+        }))
+        local label = self:_text({
+            Color = ownerName == self.selectedPlotOwner and COLORS.accent or COLORS.text,
+            Size = 12,
+            Text = compactText(ownerName, PLOT_OWNER_VALUE_LIMIT),
+            ZIndex = 213,
+        })
+        row:on("click", function()
+            self:_selectPlotOwner(ownerName)
+            self:_setPlotDropdownOpen(false)
+        end)
+        table.insert(self.plotDropdownItems, {
+            label = label,
+            row = row,
+        })
+    end
+    self:_layout()
+end
+
+function Overlay:_triggerPlotCopy()
+    local plotCopyState = self.context.store:Get().plotCopy
+    if plotCopyState and plotCopyState.active == true then
+        return
+    end
+    if not self.selectedPlotOwner then
+        self:_reportPlotCopyError("Choose a player plot to copy")
+        return
+    end
+    if self.plotSaveName == "" then
+        self:_reportPlotCopyError("Enter a save name")
+        return
+    end
+    self:_setPlotDropdownOpen(false)
+    local succeeded, accepted, message = pcall(
+        self.context.copyPlot,
+        self.selectedPlotOwner,
+        self.plotSaveName
+    )
+    if not succeeded then
+        self:_reportPlotCopyError("Plot copy could not start: " .. tostring(accepted))
+    elseif accepted == false then
+        self:_reportPlotCopyError(message or "Plot copy could not start")
+    end
+end
+
+function Overlay:_buildPlotCopy()
+    if not self.optionAvailable.plotCopy then
+        return
+    end
+
+    local surface = self.surface
+    local controls = self.controls
+    controls.sections.plotCopy = {
+        label = self:_text({
+            Color = COLORS.accent,
+            Size = 11,
+            Text = "PLOT COPY",
+            ZIndex = 203,
+        }),
+        line = surface:create("Square", {
+            Color = COLORS.border,
+            Filled = true,
+            Size = Vector2.new(206, 1),
+            Visible = true,
+            ZIndex = 202,
+        }, { pointerEvents = false }),
+    }
+    local plotCopy = {
+        ownerButton = self:_interactive(surface:create("Square", {
+            Color = COLORS.elevated,
+            Filled = true,
+            Size = Vector2.new(CONTENT_WIDTH, 30),
+            Visible = true,
+            ZIndex = 202,
+        })),
+        ownerIndicator = self:_text({
+            Center = true,
+            Color = COLORS.secondary,
+            Size = 12,
+            Text = "v",
+            ZIndex = 204,
+        }),
+        ownerLabel = self:_text({
+            Color = COLORS.secondary,
+            Size = 11,
+            Text = "PLAYER",
+            ZIndex = 203,
+        }),
+        ownerOutline = surface:create("Square", {
+            Color = COLORS.border,
+            Filled = false,
+            Size = Vector2.new(CONTENT_WIDTH, 30),
+            Thickness = 1,
+            Transparency = 0.72,
+            Visible = true,
+            ZIndex = 203,
+        }, { pointerEvents = false }),
+        ownerValue = self:_text({
+            Color = COLORS.secondary,
+            Size = 12,
+            Text = "Select a plot",
+            ZIndex = 203,
+        }),
+        saveButton = self:_interactive(surface:create("Square", {
+            Color = COLORS.elevated,
+            Filled = true,
+            Size = Vector2.new(CONTENT_WIDTH, 30),
+            Visible = true,
+            ZIndex = 202,
+        })),
+        saveLabel = self:_text({
+            Color = COLORS.secondary,
+            Size = 11,
+            Text = "SAVE",
+            ZIndex = 203,
+        }),
+        saveOutline = surface:create("Square", {
+            Color = COLORS.border,
+            Filled = false,
+            Size = Vector2.new(CONTENT_WIDTH, 30),
+            Thickness = 1,
+            Transparency = 0.72,
+            Visible = true,
+            ZIndex = 203,
+        }, { pointerEvents = false }),
+        saveValue = self:_text({
+            Color = COLORS.secondary,
+            Size = 12,
+            Text = "Enter save name",
+            ZIndex = 203,
+        }),
+        actionButton = self:_interactive(surface:create("Square", {
+            Color = COLORS.accentSurface,
+            Filled = true,
+            Size = Vector2.new(CONTENT_WIDTH, 30),
+            Visible = true,
+            ZIndex = 202,
+        })),
+        actionLabel = self:_text({
+            Center = true,
+            Color = COLORS.accent,
+            Size = 13,
+            Text = "Copy & Save",
+            ZIndex = 203,
+        }),
+        progressPhase = self:_text({
+            Color = COLORS.secondary,
+            Size = 11,
+            Text = "Ready",
+            ZIndex = 203,
+        }),
+        progressValue = self:_text({
+            Center = true,
+            Color = COLORS.secondary,
+            Size = 11,
+            Text = "0%",
+            ZIndex = 203,
+        }),
+        progressTrack = surface:create("Square", {
+            Color = COLORS.border,
+            Filled = true,
+            Size = Vector2.new(CONTENT_WIDTH, 4),
+            Visible = true,
+            ZIndex = 202,
+        }, { pointerEvents = false }),
+        progressFill = surface:create("Square", {
+            Color = COLORS.accent,
+            Filled = true,
+            Size = Vector2.new(0, 4),
+            Visible = true,
+            ZIndex = 203,
+        }, { pointerEvents = false }),
+    }
+    controls.plotCopy = plotCopy
+    local nativeSaveInput
+
+    plotCopy.ownerButton:on("click", function()
+        self:_setPlotDropdownOpen(not self.plotDropdownOpen)
+    end)
+    plotCopy.saveButton:on("click", function()
+        self:_setPlotDropdownOpen(false)
+        if nativeSaveInput then
+            nativeSaveInput:CaptureFocus()
+        end
+    end)
+    plotCopy.actionButton:on("click", function()
+        self:_triggerPlotCopy()
+    end)
+
+    if self.context.uiParent then
+        local createInstance = self.context.createInstance or Instance.new
+        local inputLayer = createInstance("ScreenGui")
+        inputLayer.Name = "UniversalHubPlotCopyInput"
+        inputLayer.DisplayOrder = 10000
+        inputLayer.IgnoreGuiInset = true
+        inputLayer.ResetOnSpawn = false
+        inputLayer.Parent = self.context.uiParent
+
+        local saveInput = createInstance("TextBox")
+        saveInput.Name = "SaveName"
+        saveInput.BackgroundTransparency = 1
+        saveInput.ClearTextOnFocus = false
+        saveInput.Position = UDim2.fromOffset(-20, -20)
+        saveInput.Size = UDim2.fromOffset(1, 1)
+        saveInput.Text = ""
+        saveInput.TextTransparency = 1
+        saveInput.Parent = inputLayer
+        nativeSaveInput = saveInput
+        plotCopy.inputLayer = inputLayer
+        plotCopy.saveInput = saveInput
+        self.nativeConnections = self.nativeConnections or {}
+        table.insert(self.nativeConnections, saveInput:GetPropertyChangedSignal("Text"):Connect(function()
+            self:_setPlotSaveName(saveInput.Text)
+        end))
+        table.insert(self.nativeConnections, saveInput.Focused:Connect(function()
+            plotCopy.saveOutline.Color = COLORS.accent
+        end))
+        table.insert(self.nativeConnections, saveInput.FocusLost:Connect(function(enterPressed)
+            plotCopy.saveOutline.Color = COLORS.border
+            if enterPressed then
+                self:_triggerPlotCopy()
+            end
+        end))
+    end
 end
 
 function Overlay:_build()
@@ -717,6 +1039,8 @@ function Overlay:_build()
         end
     end
 
+    self:_buildPlotCopy()
+
     controls.cosmetics = {
         header = self:_interactive(surface:create("Square", {
             Color = COLORS.elevated,
@@ -1140,7 +1464,7 @@ function Overlay:_layout()
     controls.sliderTrack.Position = Vector2.new(self.sliderStartX, y + 127)
     controls.sliderFill.Position = controls.sliderTrack.Position
 
-    local sectionY = y + 184
+    local sectionY = y + (self.aimControlsSupported and 184 or 60)
     local aimSection = controls.sections.rage
     if aimSection then
         aimSection.label.Position = Vector2.new(x + 12, sectionY)
@@ -1215,6 +1539,38 @@ function Overlay:_layout()
         end
     end
 
+    local plotCopy = controls.plotCopy
+    if plotCopy then
+        local section = controls.sections.plotCopy
+        section.label.Position = Vector2.new(x + 12, sectionY)
+        section.line.Position = Vector2.new(x + 82, sectionY + 7)
+        sectionY = sectionY + 22
+
+        plotCopy.ownerButton.Position = Vector2.new(x + 12, sectionY)
+        plotCopy.ownerOutline.Position = plotCopy.ownerButton.Position
+        plotCopy.ownerLabel.Position = Vector2.new(x + 22, sectionY + 9)
+        plotCopy.ownerValue.Position = Vector2.new(x + 106, sectionY + 9)
+        plotCopy.ownerIndicator.Position = Vector2.new(x + 275, sectionY + 8)
+
+        plotCopy.saveButton.Position = Vector2.new(x + 12, sectionY + 36)
+        plotCopy.saveOutline.Position = plotCopy.saveButton.Position
+        plotCopy.saveLabel.Position = Vector2.new(x + 22, sectionY + 45)
+        plotCopy.saveValue.Position = Vector2.new(x + 82, sectionY + 45)
+
+        plotCopy.actionButton.Position = Vector2.new(x + 12, sectionY + 72)
+        plotCopy.actionLabel.Position = Vector2.new(x + 150, sectionY + 80)
+        plotCopy.progressPhase.Position = Vector2.new(x + 14, sectionY + 111)
+        plotCopy.progressValue.Position = Vector2.new(x + 274, sectionY + 111)
+        plotCopy.progressTrack.Position = Vector2.new(x + 12, sectionY + 130)
+        plotCopy.progressFill.Position = plotCopy.progressTrack.Position
+
+        for index, item in ipairs(self.plotDropdownItems) do
+            item.row.Position = Vector2.new(x + 12, sectionY + 30 + (index - 1) * 26)
+            item.label.Position = Vector2.new(x + 22, sectionY + 37 + (index - 1) * 26)
+        end
+        sectionY = sectionY + 142
+    end
+
     self.optionsPanelHeight = sectionY - y + 12
     local cosmetics = controls.cosmetics
     cosmetics.header.Position = Vector2.new(x + 12, sectionY)
@@ -1271,6 +1627,11 @@ function Overlay:_setMenuVisible(visible)
         "hideButton",
         "hideLabel",
         "status",
+    }) do
+        controls[name].Visible = visible
+    end
+    local aimVisible = visible and self.aimControlsSupported
+    for _, name in ipairs({
         "weaponLabel",
         "weaponSurface",
         "weaponBorder",
@@ -1286,7 +1647,7 @@ function Overlay:_setMenuVisible(visible)
         "sliderFill",
         "sliderKnob",
     }) do
-        controls[name].Visible = visible
+        controls[name].Visible = aimVisible
     end
     for _, option in pairs(controls.options) do
         setVisible(option, visible)
@@ -1298,6 +1659,23 @@ function Overlay:_setMenuVisible(visible)
     end
     for _, section in pairs(controls.sections) do
         setVisible(section, visible)
+    end
+    local plotCopy = controls.plotCopy
+    if plotCopy then
+        for name, node in pairs(plotCopy) do
+            if name ~= "inputLayer" and name ~= "saveInput" then
+                node.Visible = visible
+            end
+        end
+        for _, item in ipairs(self.plotDropdownItems) do
+            setVisible(item, visible and self.plotDropdownOpen)
+        end
+        if plotCopy.inputLayer then
+            plotCopy.inputLayer.Enabled = visible
+        end
+        if not visible then
+            self:_setPlotDropdownOpen(false)
+        end
     end
     local cosmeticsVisible = visible and self.cosmeticsSupported
     controls.cosmetics.header.Visible = cosmeticsVisible
@@ -1345,6 +1723,26 @@ function Overlay:_renderState(state)
     controls.weaponValue.Text = state.activeWeapon or "Spectating"
     controls.weaponValue.Color = state.activeWeapon and COLORS.accent or COLORS.secondary
     self.cosmeticsOpen = state.cosmeticsOpen == true
+
+    local plotCopy = controls.plotCopy
+    if plotCopy then
+        local plotCopyState = state.plotCopy or {}
+        local progress = math.clamp(plotCopyState.progress or 0, 0, 1)
+        local active = plotCopyState.active == true
+        plotCopy.progressPhase.Text = compactText(plotCopyState.phase or "Ready", 34)
+        plotCopy.progressPhase.Color = state.error and COLORS.danger
+            or (active and COLORS.text or COLORS.secondary)
+        plotCopy.progressValue.Text = ("%d%%"):format(math.round(progress * 100))
+        plotCopy.progressValue.Color = active and COLORS.accent or COLORS.secondary
+        plotCopy.progressFill.Size = Vector2.new(CONTENT_WIDTH * progress, 4)
+        plotCopy.progressFill.Color = state.error and COLORS.danger or COLORS.accent
+        self:_setControlColor(
+            plotCopy.actionButton,
+            active and COLORS.panel or COLORS.accentSurface
+        )
+        plotCopy.actionLabel.Text = active and "Copying..." or "Copy & Save"
+        plotCopy.actionLabel.Color = active and COLORS.secondary or COLORS.accent
+    end
 
     for optionName, option in pairs(controls.options) do
         local enabled = settings[optionName] == true
@@ -1421,7 +1819,9 @@ function Overlay:_renderState(state)
     controls.fovAmount.Text = ("%d px"):format(math.round(settings.fov))
     controls.fovValue.Text = "Fullscreen"
     controls.fovCircle.Radius = settings.fov
-    controls.fovCircle.Visible = settings.fovCircle ~= false and not settings.fullScreenAim
+    controls.fovCircle.Visible = self.aimControlsSupported
+        and settings.fovCircle ~= false
+        and not settings.fullScreenAim
 
     local cosmeticMode = self.cosmeticMode
     local gloveColor = settings.gloveColorOverride
@@ -2009,6 +2409,17 @@ function Overlay:destroy()
     if self.utilityPaintConnection then
         self.utilityPaintConnection:Disconnect()
         self.utilityPaintConnection = nil
+    end
+    self:_clearPlotDropdown()
+    for _, connection in ipairs(self.nativeConnections or {}) do
+        connection:Disconnect()
+    end
+    table.clear(self.nativeConnections or {})
+    local plotCopy = self.controls.plotCopy
+    if plotCopy and plotCopy.inputLayer then
+        plotCopy.inputLayer:Destroy()
+        plotCopy.inputLayer = nil
+        plotCopy.saveInput = nil
     end
     self.surface:destroy()
     table.clear(self.playerNodes)

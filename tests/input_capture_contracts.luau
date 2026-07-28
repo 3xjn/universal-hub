@@ -159,4 +159,35 @@ assert(localPlayer.CameraMode == Enum.CameraMode.LockFirstPerson)
 
 capture:Destroy()
 capture:Destroy()
+
+local townInput = {
+    MouseBehavior = Enum.MouseBehavior.LockCenter,
+    MouseIconEnabled = true,
+    OverrideMouseIconBehavior = Enum.OverrideMouseIconBehavior.None,
+}
+function townInput:GetPropertyChangedSignal()
+    return {
+        Connect = function()
+            return {
+                Disconnect = function() end,
+            }
+        end,
+    }
+end
+local townCapture = InputCapture.new({
+    contextActionService = contextActionService,
+    guiService = guiService,
+    localPlayer = localPlayer,
+    releaseMouseOnDisable = true,
+    runService = runService,
+    userInputService = townInput,
+})
+townCapture:SetEnabled(true)
+townCapture:SetEnabled(false)
+assert(
+    townInput.MouseBehavior == Enum.MouseBehavior.Default,
+    "Town must release its third-person mouse lock when the menu closes"
+)
+townCapture:Destroy()
+
 print("input-capture-contracts-ok")

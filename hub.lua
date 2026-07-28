@@ -33,6 +33,7 @@ for _, path in ipairs({
     "modules/Session.lua",
     "modules/Overlay.lua",
     "games/Counterblox.lua",
+    "games/Town.lua",
     "games/rivals/Adapter.lua",
     "games/rivals/Targeting.lua",
     "games/rivals/ProjectileAim.lua",

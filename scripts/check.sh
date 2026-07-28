@@ -36,6 +36,7 @@ luau-lsp analyze \
     modules/Session.lua \
     modules/Overlay.lua \
     games/Counterblox.lua \
+    games/Town.lua \
     games/rivals/Adapter.lua \
     games/rivals/Targeting.lua \
     games/rivals/ProjectileAim.lua \
@@ -57,6 +58,7 @@ lune run tests/registry_contracts.luau
 lune run tests/session_contracts.luau
 lune run tests/overlay_contracts.luau
 lune run tests/counterblox_adapter_contracts.luau
+lune run tests/town_adapter_contracts.luau
 lune run tests/rivals_combat_state_contracts.luau
 lune run tests/rivals_adapter_contracts.luau
 lune run tests/shot_presentation_binding_contracts.luau

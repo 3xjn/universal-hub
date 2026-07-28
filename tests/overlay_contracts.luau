@@ -22,6 +22,7 @@ function surface:create(kind, properties)
     local node = {
         callbacks = {},
         Kind = kind,
+        destroyed = false,
     }
     setmetatable(node, {
         __newindex = function(target, key, value)
@@ -36,6 +37,9 @@ function surface:create(kind, properties)
     end
     function node:on(eventName, callback)
         self.callbacks[eventName] = callback
+    end
+    function node:destroy()
+        self.destroyed = true
     end
     table.insert(nodes, node)
     return node
@@ -131,11 +135,31 @@ local cosmeticActions = {}
 local cosmeticWeaponChanges = {}
 local guiInstances = {}
 local instanceThreadRestricted = false
+local function createSignal()
+    local signal = {
+        callbacks = {},
+    }
+    function signal:Connect(callback)
+        table.insert(self.callbacks, callback)
+        return {
+            Disconnect = function() end,
+        }
+    end
+    function signal:Fire(...)
+        for _, callback in ipairs(self.callbacks) do
+            callback(...)
+        end
+    end
+    return signal
+end
 local function createInstance(className)
     local properties = {
         ClassName = className,
         Destroyed = false,
     }
+    local propertySignals = {}
+    properties.Focused = createSignal()
+    properties.FocusLost = createSignal()
     local instance = setmetatable({}, {
         __index = properties,
         __newindex = function(_, key, value)
@@ -143,10 +167,20 @@ local function createInstance(className)
                 error("The current thread cannot access 'Instance' (lacking capability Plugin)")
             end
             properties[key] = value
+            if propertySignals[key] then
+                propertySignals[key]:Fire()
+            end
         end,
     })
     function properties.Destroy()
         properties.Destroyed = true
+    end
+    function properties.CaptureFocus()
+        properties.Focused:Fire()
+    end
+    function properties.GetPropertyChangedSignal(_, propertyName)
+        propertySignals[propertyName] = propertySignals[propertyName] or createSignal()
+        return propertySignals[propertyName]
     end
     table.insert(guiInstances, instance)
     return instance
@@ -994,4 +1028,151 @@ assert(
     "Capability filtering must collapse the panel around the remaining controls"
 )
 rivalsOverlay:destroy()
+
+local plotOwnerRequests = 0
+local plotCopyRequests = {}
+local plotCopyErrors = {}
+local townOverlay = Overlay.new({
+    capabilities = {
+        "plotCopy",
+    },
+    cosmetics = false,
+    copyPlot = function(ownerName, saveName)
+        table.insert(plotCopyRequests, {
+            ownerName = ownerName,
+            saveName = saveName,
+        })
+        return true
+    end,
+    createInstance = createInstance,
+    drawing = {
+        createSurface = function()
+            return surface
+        end,
+        supports = function()
+            return true
+        end,
+    },
+    drawingControls = {
+        new = function(controlSurface)
+            return {
+                card = function(_, options)
+                    return {
+                        background = controlSurface:create("Square", options.background, { pointerEvents = false }),
+                        border = controlSurface:create("Square", options.border, { pointerEvents = false }),
+                    }
+                end,
+                slider = function(_, options)
+                    return {
+                        hit = controlSurface:create("Square", options.hit),
+                        track = controlSurface:create("Square", options.track),
+                        fill = controlSurface:create("Square", options.fill),
+                        knob = controlSurface:create("Circle", options.knob),
+                    }
+                end,
+            }
+        end,
+    },
+    gameLabel = "Town",
+    getCamera = function()
+        return {
+            ViewportSize = Vector2.new(1280, 720),
+        }
+    end,
+    listPlotOwners = function()
+        plotOwnerRequests = plotOwnerRequests + 1
+        return { "Zulu", "Alpha" }
+    end,
+    reportPlotCopyError = function(message)
+        table.insert(plotCopyErrors, message)
+    end,
+    setInputCaptured = function() end,
+    setMenuVisible = function() end,
+    setOption = function() end,
+    setFov = function() end,
+    setRate = function() end,
+    store = store,
+    uiParent = {},
+})
+local plotCopy = townOverlay.controls.plotCopy
+assert(
+    plotCopy
+        and plotCopy.ownerButton
+        and plotCopy.saveButton
+        and plotCopy.saveInput
+        and plotCopy.actionButton
+        and plotCopy.actionLabel.Text == "Copy & Save"
+        and plotCopy.progressPhase
+        and plotCopy.progressValue
+        and plotCopy.progressTrack
+        and plotCopy.progressFill,
+    "Town must render plot selection, save-name, action, and progress controls"
+)
+plotCopy.ownerButton.callbacks.click()
+assert(
+    plotOwnerRequests == 1
+        and plotCopy.ownerIndicator.Text == "^"
+        and #townOverlay.plotDropdownItems == 2
+        and townOverlay.plotDropdownItems[1].label.Text == "Zulu"
+        and townOverlay.plotDropdownItems[2].label.Text == "Alpha",
+    "The Town player dropdown must populate from listPlotOwners"
+)
+townOverlay.plotDropdownItems[2].row.callbacks.click()
+assert(
+    townOverlay.selectedPlotOwner == "Alpha"
+        and plotCopy.ownerValue.Text == "Alpha"
+        and plotCopy.saveValue.Text == "copy_Alpha",
+    "Selecting a player must update the dropdown and seed an editable save name"
+)
+plotCopy.saveButton.callbacks.click()
+plotCopy.saveInput.Text = "My_Exact-Save_42"
+assert(
+    townOverlay.plotSaveName == "My_Exact-Save_42"
+        and plotCopy.saveValue.Text == "My_Exact-Save_42",
+    "Typing in the Town save-name input must preserve and display the exact value"
+)
+store:Patch({
+    plotCopy = {
+        active = true,
+        phase = "Creating copied parts",
+        progress = 0.375,
+    },
+})
+assert(
+    plotCopy.progressPhase.Text == "Creating copied parts"
+        and plotCopy.progressValue.Text == "38%"
+        and plotCopy.progressFill.Size == Vector2.new(276 * 0.375, 4)
+        and plotCopy.actionLabel.Text == "Copying...",
+    "Active Town plot copies must show their real phase, rounded percentage, fill, and busy action"
+)
+plotCopy.actionButton.callbacks.click()
+assert(
+    #plotCopyErrors == 0
+        and #plotCopyRequests == 0,
+    "An active Town plot copy must suppress duplicate Copy & Save requests"
+)
+store:Patch({
+    plotCopy = {
+        active = false,
+        phase = "Saved My_Exact-Save_42",
+        progress = 1,
+    },
+})
+assert(
+    plotCopy.progressPhase.Text == "Saved My_Exact-Save_42"
+        and plotCopy.progressValue.Text == "100%"
+        and plotCopy.progressFill.Size == Vector2.new(276, 4)
+        and plotCopy.actionLabel.Text == "Copy & Save",
+    "A completed Town plot copy must visibly reach 100% and restore the action"
+)
+plotCopy.actionButton.callbacks.click()
+assert(
+    #plotCopyErrors == 0
+        and #plotCopyRequests == 1
+        and plotCopyRequests[1].ownerName == "Alpha"
+        and plotCopyRequests[1].saveName == "My_Exact-Save_42",
+    "Copy & Save must pass the selected player and exact edited save name to copyPlot"
+)
+townOverlay:destroy()
+
 print("overlay-contracts-ok")

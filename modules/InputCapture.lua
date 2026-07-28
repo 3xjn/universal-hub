@@ -15,6 +15,7 @@ function InputCapture.new(services)
         enabled = false,
         guiService = services.guiService or game:GetService("GuiService"),
         localPlayer = localPlayer,
+        releaseMouseOnDisable = services.releaseMouseOnDisable == true,
         runService = services.runService or game:GetService("RunService"),
         userInputService = services.userInputService or game:GetService("UserInputService"),
     }, InputCapture)
@@ -85,7 +86,9 @@ function InputCapture:SetEnabled(enabled)
     end
     self.propertyConnections = nil
     self.localPlayer.CameraMode = self.previousCameraMode
-    self.userInputService.MouseBehavior = self.previousMouseBehavior
+    self.userInputService.MouseBehavior = self.releaseMouseOnDisable
+        and Enum.MouseBehavior.Default
+        or self.previousMouseBehavior
     self.userInputService.MouseIconEnabled = self.previousMouseIconEnabled
     self.userInputService.OverrideMouseIconBehavior = self.previousMouseIconOverride
     self.previousCameraMode = nil

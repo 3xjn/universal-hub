@@ -50,6 +50,7 @@ local Registry = import("modules/Registry")
 local Session = import("modules/Session")
 local Overlay = import("modules/Overlay")
 local Counterblox = import("games/Counterblox")
+local Town = import("games/Town")
 local Rivals = import("games/rivals/Adapter")
 local RivalsTargeting = import("games/rivals/Targeting")
 local RivalsProjectileAim = import("games/rivals/ProjectileAim")
@@ -62,6 +63,7 @@ local RivalsCombatState = import("games/rivals/CombatState")
 
 local registry = Registry.new()
 registry:Register(Counterblox)
+registry:Register(Town)
 registry:Register(Rivals)
 
 local adapterDefinition = registry:Resolve({
@@ -152,6 +154,11 @@ local store = Store.new({
     error = nil,
     menuVisible = true,
     observations = {},
+    plotCopy = {
+        active = false,
+        phase = "Ready",
+        progress = 0,
+    },
     bombObservation = {
         visible = false,
     },
@@ -173,7 +180,9 @@ environment.UniversalHubSettings = store:Get().settings
 local session
 local overlay
 local adapter
-local inputCapture = InputCapture.new()
+local inputCapture = InputCapture.new({
+    releaseMouseOnDisable = adapterDefinition.id == "town",
+})
 local thirdPersonState
 
 local function setInputCaptured(captured)
@@ -211,6 +220,27 @@ overlay = Overlay.new({
     gameLabel = adapterDefinition.label,
     getCamera = function()
         return Workspace.CurrentCamera
+    end,
+    listPlotOwners = function()
+        if adapter and type(adapter.listPlotOwners) == "function" then
+            return adapter:listPlotOwners()
+        end
+        return {}
+    end,
+    copyPlot = function(ownerName, saveName)
+        if not adapter or type(adapter.copyPlot) ~= "function" then
+            return false, "Plot copying is not ready"
+        end
+        task.spawn(function()
+            adapter:copyPlot(ownerName, saveName)
+        end)
+        return true
+    end,
+    reportPlotCopyError = function(message)
+        store:Patch({
+            error = message,
+            status = message,
+        })
     end,
     uiParent = (function()
         local success, parent = pcall(function()
