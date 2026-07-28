@@ -21,11 +21,12 @@ The menu inherits Hydroxide's generated-code and tooling identity while remainin
 - 300 × 596 px collapsed panel, anchored 20 px from the upper-right viewport edge
 - The FOV row shows the current radius on the left and an explicit `Fullscreen On/Off` toggle on the right; full-screen mode disables the radius slider and hides the FOV circle without disabling Silent Aim
 - Game name and live adapter status first
-- Equipped weapon and FOV are shared state, not game tabs
+- Equipped weapon and FOV are shared state for aim-capable adapters, not game tabs. Adapters without an aim capability omit both cards and the world-space FOV circle.
 - Compact two-column controls grouped by `RAGE`, `MELEE`, `MOVEMENT`, and `VISUALS`
 - `No Weapon Slow` sits with the combat modifiers; `No Flash` and `No Smoke` sit with visual suppression
 - Capability modifiers are visibly nested under their parent: `Wallbang` inherits `Silent Aim`, while `Micro Step` inherits `Knife Aura`
 - Game adapters expose only capabilities they implement. Adapter-unsupported controls and empty groups are omitted entirely; `N/A` is reserved for a supported capability whose required Drawing primitive is unavailable on the active executor.
+- Town exposes a `PLOT COPY` action group instead of a toggle. It contains a live plot-owner dropdown, an editable save-name field, one full-width `Copy & Save` action, and a phase-labeled loading bar driven by completed copy work. Opening the dropdown refreshes the list from the current server, excludes the local player's plot, and overlays the remaining fields without shifting the panel.
 - Configured child controls show `Standby` while their parent is disabled instead of pretending to be active
 - Compact `RSHIFT` control in the title row hides the menu; the same key restores it
 - Pointer capture prevents menu interaction from firing the weapon
@@ -50,6 +51,10 @@ The menu inherits Hydroxide's generated-code and tooling identity while remainin
 - `Toggle card`: framed two-column control with label, disabled treatment, and hover feedback. The card surface remains neutral in every state. State is carried by a 40 × 22 px switch with one muted fill across the whole pill, a dark offset shadow, and an inset rimmed thumb. Normal states do not repeat `On` or `Off`; exceptional `Standby` and `N/A` states may use text.
 - `Slider`: transparent 28 px hit target over a 4 px track, semantic fill, and high-contrast circular thumb. Rate-slider thumb travel is inset by its radius so the zero and 100 percent states stay inside the track; each live percentage sits in an aligned one-pixel framed value surface.
 - `Section divider`: compact accent eyebrow and one-pixel continuation rule.
+- `Dropdown field`: full-width elevated surface with a left-aligned field label, right-aligned selected value, disclosure indicator, border, hover feedback, and an elevated option list above following content. States are empty, closed, open, hover, and selected.
+- `Text entry field`: full-width elevated Drawing surface with label, mirrored value or placeholder, border, hover, and accent focus treatment. Keyboard capture is delegated to an off-screen native Roblox `TextBox`; the native object owns no visible layout.
+- `Primary action`: full-width accent surface with centered high-contrast label. It is used for explicit one-shot work and never represented as a persistent toggle.
+- `Progress bar`: a compact phase label, exact percentage, muted track, and semantic fill. Progress reflects completed server-replicated work across snapshot, part creation, geometry, appearance, details, collision, anchoring, and save phases; it never runs on a decorative timer.
 - These primitives are shared by every game adapter. Adapters choose capabilities and labels; they do not fork presentation.
 
 ## State contract
@@ -67,3 +72,5 @@ Full-screen aim removes only the screen-distance constraint. Team, alive, on-scr
 Character observations publish `bodyParts` as projected per-part bounds and eight ordered cuboid corners with `visible` and normalized `visibility` values. The overlay owns separate retained Square outlines and Quad faces; targeting remains the single source of truth for geometry and line-of-sight.
 
 Cosmetic overrides are local presentation state keyed by weapon name. They never call inventory remotes. The Counterblox adapter applies the selected skin, wear, and optional StatTrak value when a weapon component is created, refreshes a tracked equipped viewmodel when safe, and re-applies the override after respawn or re-equip. Glove substitution and solid-color application are scoped to local-player viewmodel construction so they cannot alter another player's gloves. Selected knife family/skin/wear, glove family/skin/wear, and optional glove color are stored per adapter in the executor workspace and restored on reload; menu disclosure state and live observations are not persisted.
+
+Town plot selection and save-name entry are live plot-copy form state, not persistent combat settings. The overlay asks the Town adapter for current plot owners whenever the dropdown opens, then sends the selected owner and exact validated save name through one action callback. The adapter owns progress, replication, failure cleanup, and the final server save command. Its replicated appearance pass includes F3X meshes, textures, and lights. For wired plots it also preserves the hidden texture values and nested F3X model hierarchy. Any moving group observed at its active endpoint is normalized to its Start Position before Town's normal `!wireconnections` compiler runs, preventing a copied open door from becoming the new closed origin. The adapter waits for the replicated `Wired` state and only then autosaves through a save GUI prepared before the wire-command cooldown.
