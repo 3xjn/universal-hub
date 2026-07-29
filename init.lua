@@ -23,14 +23,33 @@ end
 local oh = environment.oh
 assert(
     oh
-        and oh.drawing
         and oh.targeting
-        and type(oh.drawing.createSurface) == "function"
         and type(oh.targeting.nearestPlayer) == "function",
-    "Universal Hub requires the Hydroxide core to be loaded first"
+    "Universal Hub requires Hydroxide targeting to be loaded first"
 )
 
-local drawingControls = assert(oh.load, "Universal Hub requires Hydroxide helper loading")("controls")
+local Limn = configuration.Limn
+if Limn == nil then
+    local limnPath = configuration.LimnPath or "limn/dist/Limn.lua"
+    local limnChunk, limnError = loadfile(limnPath)
+    Limn = assert(limnChunk, limnError)()
+end
+assert(type(Limn.new) == "function", "Universal Hub requires a valid Limn runtime artifact")
+local GuiService = game:GetService("GuiService")
+local drawingRuntime = Limn.new({
+    Drawing = Drawing,
+    DrawingImmediate = DrawingImmediate,
+    Vector2 = Vector2,
+    Input = {
+        MapPosition = function(position)
+            local topLeftInset = GuiService:GetGuiInset()
+            return position + topLeftInset
+        end,
+        -- The visible menu intentionally sinks pointer input before Limn receives it.
+        Processed = "allow",
+    },
+})
+configuration.Limn = nil
 
 local previous = environment.UniversalHubSession
 if previous and type(previous.stop) == "function" then
@@ -215,8 +234,6 @@ overlay = Overlay.new({
     cycleGlove = function(direction)
         adapter:cycleGlove(direction)
     end,
-    drawing = oh.drawing,
-    drawingControls = drawingControls,
     gameLabel = adapterDefinition.label,
     getCamera = function()
         return Workspace.CurrentCamera
@@ -252,8 +269,10 @@ overlay = Overlay.new({
         return success and parent or nil
     end)(),
     optionLabels = adapterDefinition.optionLabels,
-    setFov = function(value)
-        session:setFov(value)
+    inputService = UserInputService,
+    limn = drawingRuntime,
+    setFov = function(value, persist)
+        session:setFov(value, persist)
     end,
     setCosmeticsOpen = function(open)
         session:setCosmeticsOpen(open)
@@ -275,8 +294,8 @@ overlay = Overlay.new({
             end
         end
     end,
-    setRate = function(name, value)
-        session:setRate(name, value)
+    setRate = function(name, value, persist)
+        session:setRate(name, value, persist)
     end,
     cycleSkin = function(direction)
         adapter:cycleSkin(direction)
@@ -347,6 +366,7 @@ local created, result = pcall(adapterDefinition.new, {
             + Vector3.new(look.X, 0, look.Z) * forward
         return direction.Magnitude > 1 and direction.Unit or direction
     end,
+    limn = drawingRuntime,
     oh = oh,
     render = function(observations, mousePosition, utilityObservations)
         overlay:render(observations, mousePosition, utilityObservations)
@@ -399,8 +419,6 @@ session:Add(function()
     inputCapture:Destroy()
 end)
 
-oh.Resources = oh.Resources or {}
-table.insert(oh.Resources, session)
 local readyStatus = ("%s ready"):format(adapterDefinition.label)
 store:Patch({ status = readyStatus })
 print("[Universal Hub]", readyStatus)

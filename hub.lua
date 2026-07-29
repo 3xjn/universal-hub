@@ -9,18 +9,27 @@ type HttpGame = typeof(game) & {
 }
 local httpGame = game :: HttpGame
 
-if not environment.oh or not environment.oh.drawing or not environment.oh.targeting then
-    local hydroxideConfiguration = environment.HydroxideConfig or {}
-    hydroxideConfiguration.Owner = configuration.HydroxideOwner or "3xjn"
-    hydroxideConfiguration.Branch = configuration.HydroxideBranch or "dev"
-    hydroxideConfiguration.Web = true
-    environment.HydroxideConfig = hydroxideConfiguration
+local limnUrl = configuration.LimnSourceUrl or sourceBaseUrl .. "vendor/Limn.lua"
+local limnSource = httpGame:HttpGet(limnUrl, true)
+local limnChunk, limnError = loadstring(limnSource, "vendor/Limn.lua")
+local Limn = assert(limnChunk, limnError)()
+assert(type(Limn.new) == "function", "Universal Hub requires a valid Limn runtime artifact")
+configuration.Limn = Limn
 
-    local hydroxideUrl = configuration.HydroxideUrl
-        or "https://raw.githubusercontent.com/3xjn/hydroxide/dev/init.lua"
-    local hydroxideSource = httpGame:HttpGet(hydroxideUrl, true)
-    local hydroxideChunk, hydroxideError = loadstring(hydroxideSource, "hydroxide/init.lua")
-    assert(hydroxideChunk, hydroxideError)()
+local helpers = type(environment.oh) == "table" and environment.oh or {}
+if not helpers.targeting or type(helpers.targeting.nearestPlayer) ~= "function" then
+    local targetingUrl = configuration.HydroxideTargetingUrl
+        or "https://raw.githubusercontent.com/3xjn/hydroxide/dev/modules/Targeting.lua"
+    local targetingSource = httpGame:HttpGet(targetingUrl, true)
+    local targetingChunk, targetingError =
+        loadstring(targetingSource, "hydroxide/modules/Targeting.lua")
+    local targeting = assert(targetingChunk, targetingError)()
+    assert(
+        type(targeting) == "table" and type(targeting.nearestPlayer) == "function",
+        "Universal Hub requires the Hydroxide targeting helper"
+    )
+    helpers.targeting = targeting
+    environment.oh = helpers
 end
 
 local sources = {}

@@ -10,7 +10,7 @@ local waitedForLoad = false
 local gameLoaded = false
 local duplicateDuringLoadResult
 local attemptedDuplicateDuringLoad = false
-local failHydroxide = false
+local failTargeting = false
 local environment = {
     queue_on_teleport = function(source)
         queueCount += 1
@@ -22,7 +22,6 @@ local environment = {
         end,
     },
     oh = {
-        drawing = {},
         targeting = {
             stale = true,
         },
@@ -58,8 +57,11 @@ end
 function readfile(path)
     table.insert(loaded, path)
     if path == "hydroxide/local/init.lua" then
-        if failHydroxide then
-            error("intentional hydroxide failure")
+        return [[getgenv().oh = { core = true }]]
+    end
+    if path == "hydroxide/local/modules/Targeting.lua" then
+        if failTargeting then
+            error("intentional targeting failure")
         end
         if not attemptedDuplicateDuringLoad then
             attemptedDuplicateDuringLoad = true
@@ -67,15 +69,9 @@ function readfile(path)
             duplicateDuringLoadResult = assert(duplicateChunk, duplicateCompileError)()
         end
         return [[
-local previous = getgenv().oh
-if previous and previous.Exit then
-    previous.Exit()
-end
-getgenv().oh = {
-    drawing = {},
-    targeting = {
-        observeCharacter = function() end,
-    },
+return {
+    nearestPlayer = function() end,
+    observeCharacter = function() end,
 }
 ]]
     end
@@ -83,8 +79,12 @@ getgenv().oh = {
     return [[
 assert(getgenv().UniversalHubConfig.Import == nil, "Local loader must clear a stale remote Import seam")
 assert(
-    type(getgenv().oh.targeting.observeCharacter) == "function",
-    "Local loader must refresh Hydroxide helpers before loading a game adapter"
+    getgenv().UniversalHubConfig.LimnPath == "limn/dist/Limn.lua",
+    "Local loader must default to Limn's published build artifact"
+)
+assert(
+    type(getgenv().oh.targeting.nearestPlayer) == "function",
+    "Local loader must initialize generic targeting before loading a targeting-dependent adapter"
 )
 return "local-loader-ok"
 ]]
@@ -108,10 +108,14 @@ assert(
 local deferredResult = pendingBootstrap()
 assert(deferredResult == "local-loader-ok")
 assert(waitedForLoad, "Local loader must yield to Roblox startup when launched from autoexec")
-assert(exited == true, "Refreshing Hydroxide must let its initializer clean up the previous session")
-assert(loaded[1] == "hydroxide/local/init.lua" and loaded[2] == "universal-hub/local/init.lua")
-assert(#loaded == 2, "A duplicate local bootstrap must not initialize Hydroxide or the hub twice")
-assert(duplicateDuringLoadResult == nil, "A duplicate local bootstrap during Hydroxide init must coalesce")
+assert(exited == false, "Loading generic targeting must not replace or exit an existing Hydroxide session")
+assert(
+    loaded[1] == "hydroxide/local/modules/Targeting.lua"
+        and loaded[2] == "universal-hub/local/init.lua",
+    "Local bootstrap must load only generic targeting before Universal Hub"
+)
+assert(#loaded == 2, "A duplicate local bootstrap must not initialize targeting or the hub twice")
+assert(duplicateDuringLoadResult == nil, "A duplicate local bootstrap during targeting init must coalesce")
 
 waitedForLoad = false
 pendingBootstrap = nil
@@ -128,10 +132,11 @@ assert(not waitedForLoad, "Manual execution in a loaded game must start immediat
 assert(queueCount == 2, "Manual reexecution after a completed flight must start a fresh bootstrap")
 
 game.JobId = "local-error-job"
-failHydroxide = true
+environment.oh = {}
+failTargeting = true
 local errorChunk, errorCompileError = loadstring(source, "local.lua")
 assert(not pcall(assert(errorChunk, errorCompileError)), "A failed local flight must surface its initialization error")
-failHydroxide = false
+failTargeting = false
 local retryChunk, retryCompileError = loadstring(source, "local.lua")
 local retryResult = assert(retryChunk, retryCompileError)()
 assert(retryResult == "local-loader-ok", "A failed local flight must release ownership for a retry")

@@ -243,8 +243,12 @@ end
 function Effects.updateVisualSuppressions(settings, roots, suppressed)
     local active = {}
     for _, entry in ipairs(roots or {}) do
-        local root = entry.instance or entry
-        local inheritedKind = entry.kind
+        local root = entry
+        local inheritedKind
+        if type(entry) == "table" then
+            root = entry.instance or entry
+            inheritedKind = entry.kind
+        end
         local instances = { root }
         if root and root.GetDescendants then
             for _, descendant in ipairs(root:GetDescendants()) do
@@ -365,10 +369,10 @@ function Effects.new(options)
     assert(options.localPlayer, "RIVALS effects require LocalPlayer")
     assert(options.projectileAim, "RIVALS effects require projectile aim")
 
-    local trajectorySurface
-    local drawing = options.drawing
-    if drawing and drawing.supports("Line") then
-        trajectorySurface = drawing.createSurface()
+    local trajectoryCanvas
+    local limn = options.limn
+    if limn and limn:supportsPrimitive("Line") then
+        trajectoryCanvas = limn:createCanvas()
     end
 
     return setmetatable({
@@ -383,7 +387,7 @@ function Effects.new(options)
         suppressedVisuals = setmetatable({}, { __mode = "k" }),
         throwableCandidates = {},
         trajectoryLines = {},
-        trajectorySurface = trajectorySurface,
+        trajectoryCanvas = trajectoryCanvas,
         workspace = options.workspace,
     }, Effects)
 end
@@ -480,7 +484,7 @@ function Effects:update(settings)
 end
 
 function Effects:renderTrajectory(path)
-    if not self.trajectorySurface then
+    if not self.trajectoryCanvas then
         return
     end
 
@@ -491,10 +495,10 @@ function Effects:renderTrajectory(path)
     for index, segment in ipairs(segments) do
         local line = self.trajectoryLines[index]
         if not line then
-            line = self.trajectorySurface:create("Line", {}, { pointerEvents = false })
+            line = self.trajectoryCanvas:create("Line")
             self.trajectoryLines[index] = line
         end
-        line:set({
+        line:patch({
             Color = Color3.fromRGB(92, 214, 255),
             From = segment.from,
             Thickness = 2,
@@ -505,15 +509,15 @@ function Effects:renderTrajectory(path)
         })
     end
     for index = #segments + 1, #self.trajectoryLines do
-        self.trajectoryLines[index]:set({ Visible = false })
+        self.trajectoryLines[index]:patch({ Visible = false })
     end
 end
 
 function Effects:stop()
     Effects.updateVisualSuppressions({}, {}, self.suppressedVisuals)
-    if self.trajectorySurface then
-        self.trajectorySurface:destroy()
-        self.trajectorySurface = nil
+    if self.trajectoryCanvas then
+        self.trajectoryCanvas:destroy()
+        self.trajectoryCanvas = nil
     end
 end
 

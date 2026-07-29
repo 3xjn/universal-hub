@@ -17,10 +17,10 @@ local Overlay = require("../modules/Overlay")
 local nodes = {}
 local destroyed = false
 local surface = {}
+local capturedPaints = {}
 
 function surface:create(kind, properties)
     local node = {
-        callbacks = {},
         Kind = kind,
         destroyed = false,
     }
@@ -35,8 +35,35 @@ function surface:create(kind, properties)
     for key, value in pairs(properties) do
         node[key] = value
     end
-    function node:on(eventName, callback)
-        self.callbacks[eventName] = callback
+    local function signal()
+        return {
+            Connect = function(_, callback)
+                return {
+                    Disconnect = function() end,
+                    callback = callback,
+                }
+            end,
+        }
+    end
+    node.Clicked = signal()
+    node.Dragged = signal()
+    node.PointerDown = signal()
+    node.PointerEntered = signal()
+    node.PointerLeft = signal()
+    node.PointerUp = signal()
+    function node:getObject()
+        return self
+    end
+    function node:setInteractive() end
+    function node:set(property, value)
+        self[property] = value
+        return self
+    end
+    function node:patch(nextProperties)
+        for key, value in pairs(nextProperties) do
+            self[key] = value
+        end
+        return self
     end
     function node:destroy()
         self.destroyed = true
@@ -45,8 +72,28 @@ function surface:create(kind, properties)
     return node
 end
 
+function surface:paintCaptured(owner, zIndex, callback)
+    local registration = {
+        callback = callback,
+        disconnected = false,
+        owner = owner,
+        zIndex = zIndex,
+    }
+    function registration:Disconnect()
+        self.disconnected = true
+    end
+    table.insert(capturedPaints, registration)
+    return registration
+end
+
 function surface:destroy()
     destroyed = true
+end
+
+function surface:bindInput()
+    return {
+        Disconnect = function() end,
+    }
 end
 
 local chamPaintCallback
@@ -127,6 +174,7 @@ local store = Store.new({
 })
 local optionChanges = {}
 local fovChanges = {}
+local fovPersistRequests = {}
 local rateChanges = {}
 local captures = {}
 local menuVisibilityChanges = {}
@@ -221,32 +269,12 @@ local overlay = Overlay.new({
         table.insert(cosmeticWeaponChanges, direction)
     end,
     createInstance = createInstance,
-    drawing = {
-        createSurface = function()
+    limn = {
+        createCanvas = function()
             return surface
         end,
-        supports = function()
+        supportsPrimitive = function()
             return true
-        end,
-    },
-    drawingControls = {
-        new = function(controlSurface)
-            return {
-                card = function(_, options)
-                    return {
-                        background = controlSurface:create("Square", options.background, { pointerEvents = false }),
-                        border = controlSurface:create("Square", options.border, { pointerEvents = false }),
-                    }
-                end,
-                slider = function(_, options)
-                    return {
-                        hit = controlSurface:create("Square", options.hit),
-                        track = controlSurface:create("Square", options.track),
-                        fill = controlSurface:create("Square", options.fill),
-                        knob = controlSurface:create("Circle", options.knob),
-                    }
-                end,
-            }
         end,
     },
     gameLabel = "Test Game",
@@ -259,8 +287,9 @@ local overlay = Overlay.new({
         silentAim = "Camera Aim",
     },
     uiParent = {},
-    setFov = function(value)
+    setFov = function(value, persist)
         table.insert(fovChanges, value)
+        table.insert(fovPersistRequests, persist == true)
     end,
     setCosmeticsOpen = function(value)
         table.insert(cosmeticsVisibilityChanges, value)
@@ -300,6 +329,76 @@ local overlay = Overlay.new({
         table.insert(cosmeticActions, { action = "statTrak" })
     end,
 })
+
+assert(
+    overlay.controls.sliderHit.Transparency > 0,
+    "FOV slider hitbox must remain hittable under Limn instead of falling through to panel drag"
+)
+for name, control in pairs(overlay.controls.rates) do
+    assert(
+        control.hit.Transparency > 0,
+        ("Rate slider %s hitbox must remain hittable under Limn"):format(name)
+    )
+end
+assert(
+    overlay.controls.cosmetics.wearHit.Transparency > 0,
+    "Wear slider hitbox must remain hittable under Limn"
+)
+for name, channel in pairs(overlay.controls.cosmetics.colorChannels) do
+    assert(
+        channel.hit.Transparency > 0,
+        ("Color slider %s hitbox must remain hittable under Limn"):format(name)
+    )
+end
+assert(
+    #capturedPaints == 8,
+    "Only FOV, rate, wear, and color slider captures must opt into active DrawingImmediate paint"
+)
+local smoothnessPaint
+for _, registration in ipairs(capturedPaints) do
+    if registration.owner == overlay.controls.rates.aimSmoothness.hit:getObject() then
+        smoothnessPaint = registration
+        break
+    end
+end
+assert(smoothnessPaint, "Aim Smoothness must register capture-scoped active paint")
+assert(
+    smoothnessPaint.zIndex > overlay.controls.rates.aimSmoothness.knob.ZIndex,
+    "Active slider paint must overlay the retained thumb without changing normal UI batching"
+)
+local activeRectangles = {}
+local activeCircles = {}
+local activePainter = {
+    FilledRectangle = function(position, size, color, opacity, rounding)
+        table.insert(activeRectangles, {
+            color = color,
+            opacity = opacity,
+            position = position,
+            rounding = rounding,
+            size = size,
+        })
+    end,
+    FilledCircle = function(position, radius, color, opacity, numSides)
+        table.insert(activeCircles, {
+            color = color,
+            numSides = numSides,
+            opacity = opacity,
+            position = position,
+            radius = radius,
+        })
+    end,
+}
+local smoothness = overlay.controls.rates.aimSmoothness
+smoothnessPaint.callback(activePainter, {
+    position = Vector2.new(smoothness.hit.Position.X + 128, smoothness.hit.Position.Y),
+})
+assert(
+    activeRectangles[1].position == smoothness.track.Position
+        and activeRectangles[1].size == Vector2.new(128, 4)
+        and activeCircles[1].position
+            == Vector2.new(smoothness.track.Position.X + 128, smoothness.track.Position.Y + 2),
+    "Captured slider paint must draw its fill and thumb from the latest pointer position"
+)
 
 assert(captures[1] == true, "A visible Drawing menu must immediately release and own the cursor")
 assert(overlay.controls.title.Text == "Universal Hub · Test Game")
@@ -473,6 +572,16 @@ assert(#fovChanges == 0, "Disabled FOV slider must ignore pointer input in fulls
 store:Patch({ settings = { fullScreenAim = false } })
 overlay.controls.sliderHit.callbacks.pointerdown(nil, Vector2.new(1280, 0))
 assert(fovChanges[1] == 500, "FOV pointer input must clamp through the slider")
+assert(
+    fovPersistRequests[1] == false,
+    "FOV slider movement must update live state without blocking on config persistence"
+)
+assert(
+    type(overlay.controls.sliderHit.callbacks.pointerup) == "function",
+    "FOV slider release must commit its final value"
+)
+overlay.controls.sliderHit.callbacks.pointerup(nil, Vector2.new(1280, 0))
+assert(fovPersistRequests[2] == true, "FOV slider release must persist once")
 overlay.controls.rates.headshotRate.hit.callbacks.pointerdown(
     nil,
     Vector2.new(overlay.controls.rates.headshotRate.hit.Position.X + 192, 0)
@@ -487,6 +596,28 @@ assert(
         and rateChanges[2].name == "missRate"
         and rateChanges[2].value == 25,
     "Accuracy sliders must publish rounded percentages"
+)
+assert(
+    overlay.controls.rates.headshotRate.fill.Visible == false
+        and overlay.controls.rates.headshotRate.knob.Visible == false
+        and overlay.controls.rates.missRate.fill.Visible == false
+        and overlay.controls.rates.missRate.knob.Visible == false,
+    "Retained slider fill/thumb must stay hidden while capture-scoped paint is active"
+)
+store:Patch({ status = "Live telemetry update" })
+assert(
+    overlay.controls.rates.headshotRate.fill.Visible == false
+        and overlay.controls.rates.headshotRate.knob.Visible == false,
+    "Reactive frame updates must not reveal stale retained visuals during active capture paint"
+)
+overlay.controls.rates.headshotRate.hit.callbacks.pointerup(
+    nil,
+    Vector2.new(overlay.controls.rates.headshotRate.hit.Position.X + 192, 0)
+)
+assert(
+    overlay.controls.rates.headshotRate.fill.Visible == true
+        and overlay.controls.rates.headshotRate.knob.Visible == true,
+    "Pointer release must restore the current retained slider fill/thumb"
 )
 
 local panelStart = overlay.controls.panel.Position
@@ -954,32 +1085,12 @@ local rivalsOverlay = Overlay.new({
         "weapon",
     },
     cosmetics = false,
-    drawing = {
-        createSurface = function()
+    limn = {
+        createCanvas = function()
             return surface
         end,
-        supports = function()
+        supportsPrimitive = function()
             return true
-        end,
-    },
-    drawingControls = {
-        new = function(controlSurface)
-            return {
-                card = function(_, options)
-                    return {
-                        background = controlSurface:create("Square", options.background, { pointerEvents = false }),
-                        border = controlSurface:create("Square", options.border, { pointerEvents = false }),
-                    }
-                end,
-                slider = function(_, options)
-                    return {
-                        hit = controlSurface:create("Square", options.hit),
-                        track = controlSurface:create("Square", options.track),
-                        fill = controlSurface:create("Square", options.fill),
-                        knob = controlSurface:create("Circle", options.knob),
-                    }
-                end,
-            }
         end,
     },
     gameLabel = "RIVALS",
@@ -1045,32 +1156,12 @@ local townOverlay = Overlay.new({
         return true
     end,
     createInstance = createInstance,
-    drawing = {
-        createSurface = function()
+    limn = {
+        createCanvas = function()
             return surface
         end,
-        supports = function()
+        supportsPrimitive = function()
             return true
-        end,
-    },
-    drawingControls = {
-        new = function(controlSurface)
-            return {
-                card = function(_, options)
-                    return {
-                        background = controlSurface:create("Square", options.background, { pointerEvents = false }),
-                        border = controlSurface:create("Square", options.border, { pointerEvents = false }),
-                    }
-                end,
-                slider = function(_, options)
-                    return {
-                        hit = controlSurface:create("Square", options.hit),
-                        track = controlSurface:create("Square", options.track),
-                        fill = controlSurface:create("Square", options.fill),
-                        knob = controlSurface:create("Circle", options.knob),
-                    }
-                end,
-            }
         end,
     },
     gameLabel = "Town",

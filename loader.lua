@@ -1,25 +1,13 @@
 local environment = assert(getgenv, "<UH> ~ Your executor is not supported")()
-local configuration = environment.UniversalHubConfig or {}
 local officialSourceRoot = "https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/"
-local sourceRoot = configuration.SourceBaseUrl or officialSourceRoot
-local localRoot = configuration.LocalRoot
-local localLoaderPath = type(localRoot) == "string" and localRoot .. "/local.lua" or nil
-local localLoaderSource
-if localLoaderPath and type(readfile) == "function" then
-    local succeeded, source = pcall(readfile, localLoaderPath)
-    if succeeded then
-        localLoaderSource = source
-    end
-end
+local sourceRoot = officialSourceRoot
+local configuration = {
+    SourceBaseUrl = sourceRoot,
+}
 type HttpGame = typeof(game) & {
     HttpGet: (self: typeof(game), url: string, noCache: boolean?) -> string,
 }
 local httpGame = game :: HttpGame
-
-if localLoaderSource then
-    local chunk, compileError = loadstring(localLoaderSource, "universal-hub/local.lua")
-    return assert(chunk, compileError)()
-end
 
 local jobId = game.JobId
 local activeFlight = environment.UniversalHubLoaderFlight
@@ -60,15 +48,11 @@ local function queueNextPlace()
     end
 
     queue(([[
-local environment = getgenv()
-environment.UniversalHubConfig = environment.UniversalHubConfig or {}
-environment.UniversalHubConfig.SourceBaseUrl = %q
 loadstring(game:HttpGet(%q, true), "universal-hub/loader.lua")()
-]]):format(sourceRoot, sourceRoot .. "loader.lua"))
+]]):format(sourceRoot .. "loader.lua"))
 end
 
 local function loadHub()
-    configuration.SourceBaseUrl = sourceRoot
     environment.UniversalHubConfig = configuration
 
     local source = httpGame:HttpGet(sourceRoot .. "hub.lua", true)

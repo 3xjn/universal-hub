@@ -214,8 +214,8 @@ function Rivals.new(context)
     local effects = Effects.new({
         clock = clock,
         collectionService = CollectionService,
-        drawing = context.oh.drawing,
         lighting = Lighting,
+        limn = context.limn,
         localPlayer = LocalPlayer,
         playerGui = context.playerGui,
         projectileAim = ProjectileAim,

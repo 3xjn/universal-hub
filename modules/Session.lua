@@ -37,9 +37,9 @@ function Session:Add(cleanup)
     return cleanup
 end
 
-function Session:patchSettings(patch)
+function Session:patchSettings(patch, persist)
     self.store:Patch({ settings = patch })
-    if self.settingsChanged then
+    if persist ~= false and self.settingsChanged then
         self.settingsChanged(self.store:Get().settings)
     end
 end
@@ -52,22 +52,22 @@ function Session:setOption(name, enabled)
     })
 end
 
-function Session:setFov(value)
+function Session:setFov(value, persist)
     local state = self.store:Get()
     local settings = state.settings
     self:patchSettings({
         fov = math.clamp(value, settings.minimumFov, settings.maximumFov),
-    })
+    }, persist)
 end
 
-function Session:setRate(name, value)
+function Session:setRate(name, value, persist)
     assert(
         name == "aimSmoothness" or name == "headshotRate" or name == "missRate",
         "Unknown hub rate: " .. tostring(name)
     )
     self:patchSettings({
         [name] = math.clamp(math.round(value), 0, 100),
-    })
+    }, persist)
 end
 
 function Session:setCosmeticsOpen(open)

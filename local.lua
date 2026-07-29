@@ -24,10 +24,27 @@ end
 
 local configuration
 
+local function loadTargeting()
+    local helpers = type(environment.oh) == "table" and environment.oh or {}
+    if helpers.targeting and type(helpers.targeting.nearestPlayer) == "function" then
+        return
+    end
+
+    local targetingChunk, targetingError = loadstring(
+        readfile(configuration.HydroxideRoot .. "/modules/Targeting.lua"),
+        "hydroxide/modules/Targeting.lua"
+    )
+    local targeting = assert(targetingChunk, targetingError)()
+    assert(
+        type(targeting) == "table" and type(targeting.nearestPlayer) == "function",
+        "Universal Hub requires the Hydroxide targeting helper"
+    )
+    helpers.targeting = targeting
+    environment.oh = helpers
+end
+
 local function loadHub()
-    local hydroxideChunk, hydroxideError =
-        loadstring(readfile(configuration.HydroxideRoot .. "/init.lua"), "hydroxide/init.lua")
-    assert(hydroxideChunk, hydroxideError)()
+    loadTargeting()
     if not ownsFlight() then
         return
     end
@@ -53,14 +70,9 @@ local function startBootstrap()
     configuration = environment.UniversalHubConfig or {}
     configuration.LocalRoot = configuration.LocalRoot or "universal-hub/local"
     configuration.HydroxideRoot = configuration.HydroxideRoot or "hydroxide/local"
+    configuration.LimnPath = configuration.LimnPath or "limn/dist/Limn.lua"
     configuration.Import = nil
     environment.UniversalHubConfig = configuration
-
-    local hydroxideConfiguration = environment.HydroxideConfig or {}
-    hydroxideConfiguration.Web = false
-    hydroxideConfiguration.LocalRoot = configuration.HydroxideRoot
-    hydroxideConfiguration.Branch = hydroxideConfiguration.Branch or "dev"
-    environment.HydroxideConfig = hydroxideConfiguration
 
     local synapse = environment.syn
     local queue = type(environment.queue_on_teleport) == "function"

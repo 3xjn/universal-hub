@@ -62,7 +62,7 @@ The per-frame flow is:
     Gunblade combo state.
 - `Effects.lua`
   - Throwable/utility discovery, classification, visibility suppression, and
-    trajectory drawing.
+    trajectory drawing on an independently owned Limn canvas.
   - Subspace Tripmine uses projected oriented bounds for its wireframe cube.
 - `Movement.lua`
   - Bunny hop and slide behavior behind active/combat/input-capture gates.
@@ -125,11 +125,21 @@ For authorized RIVALS testing:
 1. Confirm the connected Roblox client before trusting runtime observations.
 2. Prefer read-only status, evaluation, script inventory, and decompilation for
    discovery.
-3. Load the local tree with:
+3. Validate the published one-command entry with:
 
    ```lua
-   loadstring(readfile("universal-hub/local/local.lua"), "universal-hub/local.lua")()
+   loadstring(
+       game:HttpGet(
+           "https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/loader.lua",
+           true
+       ),
+       "universal-hub/loader.lua"
+   )()
    ```
+
+   This path packages Limn and generic targeting automatically. Use
+   `universal-hub/local/local.lua` only when intentionally testing a local
+   development tree.
 
 4. Validate state-changing behavior through normal game/client paths against
    practice dummies or consenting players.
@@ -145,15 +155,15 @@ handoffs.
 Focused contracts:
 
 ```bash
-HYDROXIDE_ROOT='C:/git/hydroxide' lune run tests/rivals_adapter_contracts.luau
-HYDROXIDE_ROOT='C:/git/hydroxide' lune run tests/rivals_combat_state_contracts.luau
-HYDROXIDE_ROOT='C:/git/hydroxide' lune run tests/overlay_contracts.luau
+HYDROXIDE_ROOT='C:/git/hydroxide' LIMN_ROOT='C:/path/to/limn' lune run tests/rivals_adapter_contracts.luau
+HYDROXIDE_ROOT='C:/git/hydroxide' LIMN_ROOT='C:/path/to/limn' lune run tests/rivals_combat_state_contracts.luau
+HYDROXIDE_ROOT='C:/git/hydroxide' LIMN_ROOT='C:/path/to/limn' lune run tests/overlay_contracts.luau
 ```
 
 Full repository gate:
 
 ```bash
-HYDROXIDE_ROOT='C:/git/hydroxide' ./scripts/check.sh
+HYDROXIDE_ROOT='C:/git/hydroxide' LIMN_ROOT='C:/path/to/limn' ./scripts/check.sh
 ```
 
 Add a behavioral contract for subtle cross-module boundaries, especially

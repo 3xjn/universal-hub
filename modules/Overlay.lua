@@ -126,8 +126,10 @@ local UTILITY_CUBE_EDGES = {
 }
 
 local BODY_CUBE_OPACITY = 0.18
+local ACTIVE_CONTROL_LAYER = 206
 local CONTENT_WIDTH = 276
 local FOV_TRACK_WIDTH = 252
+local HITBOX_TRANSPARENCY = 0.01
 local RATE_TRACK_WIDTH = 256
 local RATE_THUMB_RADIUS = 6
 local PLOT_OWNER_VALUE_LIMIT = 22
@@ -140,6 +142,137 @@ local COSMETIC_WEAPON_CONTROLS = {
     weaponPrevious = true,
     weaponPreviousLabel = true,
 }
+
+local EVENT_SIGNALS = {
+    click = "Clicked",
+    drag = "Dragged",
+    pointerdown = "PointerDown",
+    pointerenter = "PointerEntered",
+    pointerleave = "PointerLeft",
+    pointerup = "PointerUp",
+}
+
+local function wrapElement(element, canvas)
+    local object = element:getObject()
+    local callbacks = {}
+    local node
+    local methods = {}
+
+    function methods:on(eventName, callback)
+        local signalName = assert(EVENT_SIGNALS[eventName], "Unknown Limn element event: " .. tostring(eventName))
+        assert(type(callback) == "function", "Limn element event handler must be a function")
+        callbacks[eventName] = callback
+        element:setInteractive(true)
+        return element[signalName]:Connect(function(event)
+            callback(node, event.position, event.input, event.delta)
+        end)
+    end
+
+    function methods:set(properties)
+        element:patch(properties)
+        return node
+    end
+
+    methods.patch = methods.set
+
+    function methods:destroy()
+        element:destroy()
+    end
+
+    methods.Destroy = methods.destroy
+    methods.Remove = methods.destroy
+
+    function methods:getObject()
+        return object
+    end
+
+    function methods:paintCaptured(zIndex, callback)
+        return canvas:paintCaptured(element, zIndex, callback)
+    end
+
+    node = setmetatable({
+        callbacks = callbacks,
+    }, {
+        __index = function(_, key)
+            local method = methods[key]
+            if method ~= nil then
+                return method
+            end
+            return object[key]
+        end,
+        __newindex = function(_, key, value)
+            element:set(key, value)
+        end,
+    })
+    return node
+end
+
+local function createCanvasView(runtime)
+    local canvas = runtime:createCanvas()
+    local surface = {
+        canvas = canvas,
+    }
+
+    function surface:create(kind, properties, options)
+        local interactive = options ~= nil
+            and (options.interactive == true or options.pointerEvents == true)
+        return wrapElement(canvas:create(kind, properties, {
+            interactive = interactive,
+        }), canvas)
+    end
+
+    function surface:paint(zIndex, callback)
+        return canvas:paint(zIndex, callback)
+    end
+
+    function surface:bindInput(inputService)
+        return canvas:bindInput(inputService)
+    end
+
+    function surface:destroy()
+        canvas:destroy()
+    end
+
+    return surface
+end
+
+local function registerActiveSliderPaint(hit, draw)
+    return pcall(function()
+        hit:paintCaptured(ACTIVE_CONTROL_LAYER, function(painter, event)
+            draw(painter, event.position)
+        end)
+    end)
+end
+
+local function setRetainedSliderVisible(overlay, fill, knob, visible)
+    if visible then
+        overlay.activeSliderVisuals[fill] = nil
+        overlay.activeSliderVisuals[knob] = nil
+        overlay:_setMenuVisible(overlay.context.store:Get().menuVisible ~= false)
+        return
+    end
+    overlay.activeSliderVisuals[fill] = true
+    overlay.activeSliderVisuals[knob] = true
+    fill.Visible = false
+    knob.Visible = false
+end
+
+local function paintActiveSlider(painter, track, fillWidth, knobX, knobRadius, fillColor)
+    painter.FilledRectangle(
+        track.Position,
+        Vector2.new(math.max(0, fillWidth), 4),
+        fillColor,
+        1,
+        0
+    )
+    painter.FilledCircle(
+        Vector2.new(knobX, track.Position.Y + 2),
+        knobRadius,
+        COLORS.text,
+        1,
+        32
+    )
+end
 
 local function clampCenteredUtilityLabel(position, viewportSize, textBounds)
     if not viewportSize then
@@ -174,8 +307,7 @@ local function compactText(value, limit)
 end
 
 function Overlay.new(context)
-    assert(context and context.drawing, "Hub overlay requires Hydroxide drawing helpers")
-    assert(context.drawingControls, "Hub overlay requires Hydroxide drawing controls")
+    assert(context and context.limn, "Hub overlay requires a Limn runtime")
     assert(context.store, "Hub overlay requires a reactive store")
 
     local optionAvailable = {}
@@ -194,8 +326,12 @@ function Overlay.new(context)
             optionAvailable[optionName] = true
         end
     end
+    local primitiveSupport = {}
+    for _, kind in ipairs({ "Square", "Circle", "Text", "Quad", "Line" }) do
+        primitiveSupport[kind] = context.limn:supportsPrimitive(kind)
+    end
     local optionSupport = {
-        chams = type(context.drawing.supports) ~= "function" or context.drawing.supports("Quad"),
+        chams = primitiveSupport.Quad,
     }
     local rateAvailable = {}
     for _, definition in ipairs(RATE_CONTROLS) do
@@ -216,6 +352,7 @@ function Overlay.new(context)
         or rateAvailable.missRate == true
     local self = setmetatable({
         aimControlsSupported = aimControlsSupported,
+        activeSliderVisuals = setmetatable({}, { __mode = "k" }),
         captured = false,
         cosmeticsSupported = context.cosmetics ~= false,
         context = context,
@@ -225,6 +362,7 @@ function Overlay.new(context)
         observations = {},
         optionAvailable = optionAvailable,
         optionSupport = optionSupport,
+        primitiveSupport = primitiveSupport,
         optionLabels = context.optionLabels or {},
         plotDropdownItems = {},
         plotDropdownOpen = false,
@@ -242,13 +380,31 @@ function Overlay.new(context)
             observations = {},
         },
         worldGui = nil,
-        surface = context.drawing.createSurface({
-            acceptProcessedInput = true,
-        }),
     }, Overlay)
 
-    self.drawingControls = context.drawingControls.new(self.surface)
+    local missingPrimitives = {}
+    for _, kind in ipairs({ "Square", "Circle", "Text" }) do
+        if not primitiveSupport[kind] then
+            table.insert(missingPrimitives, kind)
+        end
+    end
+    self.missingPrimitives = missingPrimitives
+    if #missingPrimitives > 0 then
+        self.available = false
+        warn(
+            "[Universal Hub]",
+            "overlay disabled; unsupported drawing primitives:",
+            table.concat(missingPrimitives, ", ")
+        )
+        return self
+    end
 
+    self.available = true
+    self.surface = createCanvasView(context.limn)
+    self.canvas = self.surface.canvas
+    if context.inputService then
+        self.surface:bindInput(context.inputService)
+    end
     self:_build()
     self.immediateChams = pcall(function()
         self.chamPaintConnection = self.surface:paint(WORLD_LAYER.chams, function(renderer)
@@ -601,8 +757,21 @@ end
 
 function Overlay:_build()
     local surface = self.surface
-    local drawingControls = self.drawingControls
     local controls = self.controls
+    local function card(options)
+        return {
+            background = surface:create("Square", options.background, { pointerEvents = false }),
+            border = surface:create("Square", options.border, { pointerEvents = false }),
+        }
+    end
+    local function slider(options)
+        return {
+            hit = surface:create("Square", options.hit, { pointerEvents = true }),
+            track = surface:create("Square", options.track, { pointerEvents = false }),
+            fill = surface:create("Square", options.fill, { pointerEvents = false }),
+            knob = surface:create("Circle", options.knob, { pointerEvents = false }),
+        }
+    end
 
     controls.panelShadow = surface:create("Square", {
         Color = COLORS.panelShadow,
@@ -704,7 +873,7 @@ function Overlay:_build()
         Text = "Spectating",
         ZIndex = 202,
     })
-    local weaponCard = drawingControls:card({
+    local weaponCard = card({
         background = {
             Color = COLORS.elevated, Filled = true, Size = Vector2.new(CONTENT_WIDTH, 32), Visible = true, ZIndex = 201,
         },
@@ -714,7 +883,7 @@ function Overlay:_build()
     })
     controls.weaponSurface = weaponCard.background
     controls.weaponBorder = weaponCard.border
-    local fovCard = drawingControls:card({
+    local fovCard = card({
         background = {
             Color = COLORS.elevated, Filled = true, Size = Vector2.new(CONTENT_WIDTH, 86), Visible = true, ZIndex = 201,
         },
@@ -754,8 +923,8 @@ function Overlay:_build()
         local settings = self.context.store:Get().settings
         self.context.setOption("fullScreenAim", not settings.fullScreenAim)
     end)
-    local fovSlider = drawingControls:slider({
-        hit = { Color = COLORS.panel, Filled = true, Size = Vector2.new(FOV_TRACK_WIDTH, 28), Transparency = 0, Visible = true, ZIndex = 202 },
+    local fovSlider = slider({
+        hit = { Color = COLORS.panel, Filled = true, Size = Vector2.new(FOV_TRACK_WIDTH, 28), Transparency = HITBOX_TRANSPARENCY, Visible = true, ZIndex = 202 },
         track = { Color = COLORS.border, Filled = true, Size = Vector2.new(FOV_TRACK_WIDTH, 4), Visible = true, ZIndex = 203 },
         fill = { Color = COLORS.accent, Filled = true, Visible = true, ZIndex = 204 },
         knob = { Color = COLORS.text, Filled = true, NumSides = 32, Radius = 7, Visible = true, ZIndex = 205 },
@@ -795,8 +964,8 @@ function Overlay:_build()
                     Visible = true,
                     ZIndex = 202,
                 }, { pointerEvents = false }),
-                slider = drawingControls:slider({
-                    hit = { Color = COLORS.panel, Filled = true, Size = Vector2.new(RATE_TRACK_WIDTH, 28), Transparency = 0, Visible = true, ZIndex = 202 },
+                slider = slider({
+                    hit = { Color = COLORS.panel, Filled = true, Size = Vector2.new(RATE_TRACK_WIDTH, 28), Transparency = HITBOX_TRANSPARENCY, Visible = true, ZIndex = 202 },
                     track = { Color = COLORS.border, Filled = true, Size = Vector2.new(RATE_TRACK_WIDTH, 4), Visible = true, ZIndex = 203 },
                     fill = { Color = COLORS.accent, Filled = true, Visible = true, ZIndex = 204 },
                     knob = { Color = COLORS.text, Filled = true, NumSides = 32, Radius = RATE_THUMB_RADIUS, Visible = true, ZIndex = 205 },
@@ -835,19 +1004,50 @@ function Overlay:_build()
             control.track = control.slider.track
             control.fill = control.slider.fill
             control.knob = control.slider.knob
-            local function setRate(point)
+            local activePaint = registerActiveSliderPaint(control.hit, function(painter, point)
                 local alpha = math.clamp(
                     (point.X - control.hit.Position.X) / RATE_TRACK_WIDTH,
                     0,
                     1
                 )
-                self.context.setRate(definition.id, math.round(alpha * 100))
+                local thumbTravel = RATE_TRACK_WIDTH - RATE_THUMB_RADIUS * 2
+                local thumbX = control.track.Position.X
+                    + RATE_THUMB_RADIUS
+                    + thumbTravel * alpha
+                paintActiveSlider(
+                    painter,
+                    control.track,
+                    thumbX - control.track.Position.X,
+                    thumbX,
+                    RATE_THUMB_RADIUS,
+                    COLORS.accent
+                )
+            end)
+            local function setRate(point, persist)
+                local alpha = math.clamp(
+                    (point.X - control.hit.Position.X) / RATE_TRACK_WIDTH,
+                    0,
+                    1
+                )
+                self.context.setRate(definition.id, math.round(alpha * 100), persist)
             end
             control.hit:on("pointerdown", function(_node, point)
-                setRate(point)
+                setRate(point, false)
+                if activePaint then
+                    setRetainedSliderVisible(self, control.fill, control.knob, false)
+                end
             end)
             control.hit:on("drag", function(_node, point)
-                setRate(point)
+                setRate(point, false)
+                if activePaint then
+                    setRetainedSliderVisible(self, control.fill, control.knob, false)
+                end
+            end)
+            control.hit:on("pointerup", function(_node, point)
+                setRate(point, true)
+                if activePaint then
+                    setRetainedSliderVisible(self, control.fill, control.knob, true)
+                end
             end)
             controls.rates[definition.id] = control
         end
@@ -1228,7 +1428,7 @@ function Overlay:_build()
             Color = COLORS.panel,
             Filled = true,
             Size = Vector2.new(276, 22),
-            Transparency = 0,
+            Transparency = HITBOX_TRANSPARENCY,
             Visible = false,
             ZIndex = 202,
         })),
@@ -1280,7 +1480,7 @@ function Overlay:_build()
                 Color = COLORS.panel,
                 Filled = true,
                 Size = Vector2.new(236, 20),
-                Transparency = 0,
+                Transparency = HITBOX_TRANSPARENCY,
                 Visible = false,
                 ZIndex = 202,
             })),
@@ -1370,20 +1570,53 @@ function Overlay:_build()
         end
     end)
 
-    local function setFov(point)
+    local function setFov(point, persist)
         local state = self.context.store:Get()
         if state.settings.fullScreenAim then
             return
         end
         local alpha = math.clamp((point.X - self.sliderStartX) / FOV_TRACK_WIDTH, 0, 1)
         local settings = state.settings
-        self.context.setFov(settings.minimumFov + (settings.maximumFov - settings.minimumFov) * alpha)
+        self.context.setFov(
+            settings.minimumFov + (settings.maximumFov - settings.minimumFov) * alpha,
+            persist
+        )
     end
+    local function fovSliderEnabled()
+        return self.context.store:Get().settings.fullScreenAim ~= true
+    end
+    local fovActivePaint = registerActiveSliderPaint(controls.sliderHit, function(painter, point)
+        if not fovSliderEnabled() then
+            return
+        end
+        local alpha = math.clamp((point.X - self.sliderStartX) / FOV_TRACK_WIDTH, 0, 1)
+        local knobX = self.sliderStartX + FOV_TRACK_WIDTH * alpha
+        paintActiveSlider(
+            painter,
+            controls.sliderTrack,
+            FOV_TRACK_WIDTH * alpha,
+            knobX,
+            7,
+            COLORS.accent
+        )
+    end)
     controls.sliderHit:on("pointerdown", function(_node, point)
-        setFov(point)
+        setFov(point, false)
+        if fovActivePaint and fovSliderEnabled() then
+            setRetainedSliderVisible(self, controls.sliderFill, controls.sliderKnob, false)
+        end
     end)
     controls.sliderHit:on("drag", function(_node, point)
-        setFov(point)
+        setFov(point, false)
+        if fovActivePaint and fovSliderEnabled() then
+            setRetainedSliderVisible(self, controls.sliderFill, controls.sliderKnob, false)
+        end
+    end)
+    controls.sliderHit:on("pointerup", function(_node, point)
+        setFov(point, true)
+        if fovActivePaint then
+            setRetainedSliderVisible(self, controls.sliderFill, controls.sliderKnob, true)
+        end
     end)
     local function setWear(point)
         local alpha = math.clamp((point.X - self.wearStartX) / 276, 0, 1)
@@ -1393,11 +1626,49 @@ function Overlay:_build()
             self.context.setWear(alpha)
         end
     end
+    local wearActivePaint = registerActiveSliderPaint(controls.cosmetics.wearHit, function(painter, point)
+        local alpha = math.clamp((point.X - self.wearStartX) / 276, 0, 1)
+        paintActiveSlider(
+            painter,
+            controls.cosmetics.wearTrack,
+            276 * alpha,
+            self.wearStartX + 276 * alpha,
+            6,
+            COLORS.accent
+        )
+    end)
     controls.cosmetics.wearHit:on("pointerdown", function(_node, point)
         setWear(point)
+        if wearActivePaint then
+            setRetainedSliderVisible(
+                self,
+                controls.cosmetics.wearFill,
+                controls.cosmetics.wearKnob,
+                false
+            )
+        end
     end)
     controls.cosmetics.wearHit:on("drag", function(_node, point)
         setWear(point)
+        if wearActivePaint then
+            setRetainedSliderVisible(
+                self,
+                controls.cosmetics.wearFill,
+                controls.cosmetics.wearKnob,
+                false
+            )
+        end
+    end)
+    controls.cosmetics.wearHit:on("pointerup", function(_node, point)
+        setWear(point)
+        if wearActivePaint then
+            setRetainedSliderVisible(
+                self,
+                controls.cosmetics.wearFill,
+                controls.cosmetics.wearKnob,
+                true
+            )
+        end
     end)
     for channelName, channel in pairs(controls.cosmetics.colorChannels) do
         local function setColor(point)
@@ -1414,11 +1685,34 @@ function Overlay:_build()
             color[channelName] = math.clamp((point.X - self.colorStartX) / 236, 0, 1)
             self.context.setGloveColor(color)
         end
+        local activePaint = registerActiveSliderPaint(channel.hit, function(painter, point)
+            local alpha = math.clamp((point.X - self.colorStartX) / 236, 0, 1)
+            paintActiveSlider(
+                painter,
+                channel.track,
+                236 * alpha,
+                self.colorStartX + 236 * alpha,
+                5,
+                channel.label.Color
+            )
+        end)
         channel.hit:on("pointerdown", function(_node, point)
             setColor(point)
+            if activePaint then
+                setRetainedSliderVisible(self, channel.fill, channel.knob, false)
+            end
         end)
         channel.hit:on("drag", function(_node, point)
             setColor(point)
+            if activePaint then
+                setRetainedSliderVisible(self, channel.fill, channel.knob, false)
+            end
+        end)
+        channel.hit:on("pointerup", function(_node, point)
+            setColor(point)
+            if activePaint then
+                setRetainedSliderVisible(self, channel.fill, channel.knob, true)
+            end
         end)
     end
 end
@@ -1698,6 +1992,9 @@ function Overlay:_setMenuVisible(visible)
                 node.Visible = cosmeticsVisible and self.cosmeticsOpen == true
             end
         end
+    end
+    for node in pairs(self.activeSliderVisuals) do
+        node.Visible = false
     end
 
     if self.captured ~= visible then
@@ -2111,7 +2408,7 @@ function Overlay:_getUtilityNodes(index)
             ZIndex = WORLD_LAYER.utilityText,
         }),
     }
-    if not self.immediateUtilityZones then
+    if not self.immediateUtilityZones and self.primitiveSupport.Quad then
         nodes.zones = {}
     end
     self.utilityNodes[index] = nodes
@@ -2137,6 +2434,9 @@ function Overlay:_syncUtilityZones(nodes, count)
 end
 
 function Overlay:_syncUtilityWireframe(nodes, count)
+    if not self.primitiveSupport.Line then
+        return
+    end
     nodes.wireframe = nodes.wireframe or {}
     while #nodes.wireframe < count do
         table.insert(nodes.wireframe, self.surface:create("Line", {
@@ -2207,6 +2507,7 @@ function Overlay:_renderUtilities(observations, enabled)
             or (tone == "smoke" and COLORS.secondary or COLORS.accent)
         local corners = observation.wireframeCorners
         local wireframeVisible = enabled
+            and self.primitiveSupport.Line
             and observation.markerStyle == "wireframeCube"
             and observation.onScreen == true
             and type(corners) == "table"
@@ -2256,7 +2557,7 @@ function Overlay:_renderUtilities(observations, enabled)
         nodes.label.Visible = markerVisible or wireframeVisible
 
         local polygons = enabled and observation.polygons or {}
-        if not self.immediateUtilityZones then
+        if not self.immediateUtilityZones and nodes.zones then
             self:_syncUtilityZones(nodes, #polygons)
             for polygonIndex, polygon in ipairs(polygons) do
                 local zone = nodes.zones[polygonIndex]
@@ -2280,7 +2581,7 @@ function Overlay:_renderUtilities(observations, enabled)
 end
 
 function Overlay:render(observations, mousePosition, utilityObservations)
-    if self.destroyed then
+    if self.destroyed or not self.available then
         return
     end
 
@@ -2421,7 +2722,11 @@ function Overlay:destroy()
         plotCopy.inputLayer = nil
         plotCopy.saveInput = nil
     end
-    self.surface:destroy()
+    if self.surface then
+        self.surface:destroy()
+        self.surface = nil
+        self.canvas = nil
+    end
     table.clear(self.playerNodes)
     table.clear(self.utilityNodes)
 end

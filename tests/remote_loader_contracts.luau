@@ -105,44 +105,19 @@ assert(duplicateLoadedResult == nil, "A duplicate loaded remote bootstrap must c
 
 environment.UniversalHubConfig = {
     LocalRoot = "universal-hub/local",
+    SourceBaseUrl = "https://example.invalid/stale/",
 }
 requestedUrl = nil
 queuedTeleportSource = nil
 function readfile(path)
-    assert(path == "universal-hub/local/local.lua")
-    return [[
-local environment = getgenv()
-environment.LocalLoaderDelegated = true
-environment.queue_on_teleport("local-loader-queue")
-return "local-loader-from-remote-entry-ok"
-]]
+    error("The normal remote loader must not execute stale local source: " .. tostring(path))
 end
 local localChunk, localCompileError = loadstring(source, "loader.lua")
 local localResult = assert(localChunk, localCompileError)()
-assert(localResult == "local-loader-from-remote-entry-ok")
-assert(requestedUrl == nil, "An explicitly configured local version must not fall back to GitHub")
+assert(localResult == "remote-loader-ok")
 assert(
-    queuedTeleportSource == "local-loader-queue",
-    "A local version entered through loader.lua must own its queued follow-up bootstrap"
-)
-assert(environment.LocalLoaderDelegated == true, "loader.lua must delegate directly to a configured local loader")
-
-environment.UniversalHubConfig = {
-    SourceBaseUrl = "https://example.invalid/custom/",
-}
-readfile = nil
-requestedUrl = nil
-queuedTeleportSource = nil
-local customChunk, customCompileError = loadstring(source, "loader.lua")
-local customResult = assert(customChunk, customCompileError)()
-assert(customResult == "remote-loader-ok")
-assert(
-    requestedUrl == "https://example.invalid/custom/hub.lua",
-    "An explicit custom source may be used for the current session"
-)
-assert(
-    queuedTeleportSource == nil,
-    "A custom remote source must not become persistent cross-teleport code execution"
+    requestedUrl == "https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/hub.lua",
+    "Normal launch must ignore stale local path state and fetch the packaged remote hub"
 )
 
 loaded = false

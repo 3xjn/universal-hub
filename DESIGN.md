@@ -1,6 +1,12 @@
 # Universal Hub design
 
-The menu inherits Hydroxide's generated-code and tooling identity while remaining a separate game-adapter surface.
+The menu preserves the established generated-code and tooling identity while remaining a separate game-adapter surface. Limn owns the generic retained drawing, paint, and input runtime; Universal Hub owns every panel, control, theme, and game-specific overlay component.
+
+## Runtime packaging
+
+- The normal remote loader always uses Universal Hub's canonical published source root. It does not inspect local workspace paths or require global configuration.
+- Remote startup fetches the generated `vendor/Limn.lua` artifact with the matching Universal Hub sources and loads only Hydroxide's generic `modules/Targeting.lua`.
+- Local development is an explicit `local.lua` entry with conventional workspace defaults and optional path overrides. It never changes how the normal remote loader selects sources.
 
 ## Visual language
 
@@ -37,6 +43,7 @@ The menu inherits Hydroxide's generated-code and tooling identity while remainin
 - Cosmetic controls reuse the elevated control surface, accent active state, 4 px spacing rhythm, and Drawing Plex typography. The collapsed state consumes only one 30 px row.
 - `Hitboxes` and `Chams` are independent visual controls. Hitboxes use each observed body part's projected bounds as a 1.5 px outline; Chams use six filled `Quad` faces per body part to produce a translucent projected cuboid
 - A visual control whose Drawing primitive is unavailable on the active executor remains visible but reads `N/A` and cannot publish a misleading enabled state
+- The shared menu requires Limn `Square`, `Circle`, and `Text` primitives. If any are unavailable, the menu disables cleanly without blocking the game adapter. Optional `Quad` and `Line` features degrade independently.
 - Cuboid faces use 0.18 Drawing opacity. Each body part uses the same five-point visibility sample as targeting: green means at least one sampled point is on-screen and directly shootable, red means every sampled point is blocked
 - Health is a 4 px vertical track anchored 7 px left of the projected character bounds. Its 2 px inner fill rises from the bottom, interpolating from blocked/error red at zero health to active/visible green at full health.
 - World utility observations reuse the existing palette and overlay surface. Moving throwables receive a compact marker and label; replicated fire and smoke voxels are projected into one immediate Drawing triangle mesh per paint pass, avoiding a retained object per tile while preserving the exact server-authored affected area rather than estimating a radius. Executors without immediate paint support fall back to retained translucent quads.
@@ -56,6 +63,7 @@ The menu inherits Hydroxide's generated-code and tooling identity while remainin
 - `Primary action`: full-width accent surface with centered high-contrast label. It is used for explicit one-shot work and never represented as a persistent toggle.
 - `Progress bar`: a compact phase label, exact percentage, muted track, and semantic fill. Progress reflects completed server-replicated work across snapshot, part creation, geometry, appearance, details, collision, anchoring, and save phases; it never runs on a decorative timer.
 - These primitives are shared by every game adapter. Adapters choose capabilities and labels; they do not fork presentation.
+- Each overlay and game-specific drawing surface owns a separate Limn canvas and destroys it on unload or reload.
 
 ## State contract
 
@@ -69,7 +77,7 @@ Visual suppression is transition-based. Enabling `No Flash` cancels the active f
 
 Full-screen aim removes only the screen-distance constraint. Team, alive, on-screen, visibility, and wall-penetration checks remain unchanged.
 
-Character observations publish `bodyParts` as projected per-part bounds and eight ordered cuboid corners with `visible` and normalized `visibility` values. The overlay owns separate retained Square outlines and Quad faces; targeting remains the single source of truth for geometry and line-of-sight.
+Character observations publish `bodyParts` as projected per-part bounds and eight ordered cuboid corners with `visible` and normalized `visibility` values. The overlay owns separate retained Limn `Square` outlines and `Quad` faces; targeting remains the single source of truth for geometry and line-of-sight.
 
 Cosmetic overrides are local presentation state keyed by weapon name. They never call inventory remotes. The Counterblox adapter applies the selected skin, wear, and optional StatTrak value when a weapon component is created, refreshes a tracked equipped viewmodel when safe, and re-applies the override after respawn or re-equip. Glove substitution and solid-color application are scoped to local-player viewmodel construction so they cannot alter another player's gloves. Selected knife family/skin/wear, glove family/skin/wear, and optional glove color are stored per adapter in the executor workspace and restored on reload; menu disclosure state and live observations are not persisted.
 

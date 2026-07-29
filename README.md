@@ -1,22 +1,30 @@
 # Universal Hub
 
-A game-adapter hub powered by Hydroxide's reusable modules. The hub owns shared reactive state, Drawing UI, cleanup, and game selection. Each game adapter owns only the client contracts observed in that game.
+A game-adapter hub that uses Limn for overlays and Hydroxide for targeting and program inspection. The hub owns shared reactive state, UI components, cleanup, and game selection. Each game adapter owns only the client contracts observed in that game.
 
 ## Load
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/loader.lua"))()
+loadstring(
+    game:HttpGet(
+        "https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/loader.lua",
+        true
+    ),
+    "universal-hub/loader.lua"
+)()
 ```
 
-The loader supports Volt and Potassium and fetches the current `main` branch. Press `Right Shift` to hide or restore the menu.
+The loader supports Volt and Potassium and fetches the current `main` branch. Normal startup downloads Universal Hub's packaged Limn build and Hydroxide's generic targeting module; it does not load the Hydroxide core, drawing, controls, or weapon helpers. No global configuration or local dependency paths are required. Press `Right Shift` to hide or restore the menu.
 
 ## Local use
 
-The local loader initializes Hydroxide's core without opening the full Hydroxide UI, then starts the matching game adapter:
+The local loader initializes Hydroxide's generic targeting helper without loading the Hydroxide core or UI, loads Limn, then starts the matching game adapter:
 
 ```lua
 return loadstring(readfile("universal-hub/local/local.lua"), "universal-hub/local.lua")()
 ```
+
+Local development defaults to `universal-hub/local`, `hydroxide/local`, and `limn/dist/Limn.lua`. `UniversalHubConfig` path overrides remain available for development, but the normal remote loader intentionally ignores local paths so stale workspace files cannot replace published sources.
 
 Current adapter:
 
@@ -36,7 +44,11 @@ All combat options default off. Visual diagnostics default on. Wallbang cannot m
 
 ## Project boundary
 
-Hydroxide remains the generic inspection and helper project. This repository owns the game registry, menu, sessions, and per-game adapters. New games belong under `games/` and register through `modules/Registry.lua`.
+Limn is the generic retained drawing, paint, input, and cleanup runtime. Universal Hub owns every panel, slider, button, theme, and game-specific drawing on consumer-owned Limn canvases. Hydroxide remains limited to targeting and program inspection. New games belong under `games/` and register through `modules/Registry.lua`.
+
+Limn input positions remain in full-screen coordinates because Universal Hub lays out Drawing primitives against `Camera.ViewportSize`. The menu explicitly accepts processed input because its own capture layer sinks pointer actions to prevent clicks from reaching the game. Each overlay and RIVALS trajectory canvas is destroyed with its owning session.
+
+The shared menu disables cleanly if `Square`, `Circle`, or `Text` is unavailable. Optional `Quad` chams, retained utility zones, and `Line` wireframes or trajectories are feature-detected independently.
 
 ## Verification
 

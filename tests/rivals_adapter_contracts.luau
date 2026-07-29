@@ -2057,6 +2057,42 @@ local smokeRoot = {
     end,
 }
 local suppressedVisuals = {}
+do
+    local lightingRoot = newproxy(true)
+    getmetatable(lightingRoot).__index = function(_self, member)
+        if member == "Name" then
+            return "Lighting"
+        end
+        if member == "GetDescendants" then
+            return function()
+                return { flashEffect }
+            end
+        end
+        if member == "IsA" then
+            return function()
+                return false
+            end
+        end
+        error(("%s is not a valid member of Lighting \"Lighting\""):format(tostring(member)))
+    end
+    local rawLightingOk, rawLightingError = pcall(function()
+        RivalsEffects.updateVisualSuppressions({
+            noFlash = true,
+        }, {
+            lightingRoot,
+        }, suppressedVisuals)
+    end)
+    assert(
+        rawLightingOk,
+        "Raw Lighting Instance roots must not be interpreted as descriptor tables: "
+            .. tostring(rawLightingError)
+    )
+    assert(
+        flashEffect.Enabled == false,
+        "Raw Lighting descendants must still participate in visual suppression"
+    )
+    RivalsEffects.updateVisualSuppressions({}, {}, suppressedVisuals)
+end
 RivalsEffects.updateVisualSuppressions({
     noFlash = true,
     noSmoke = true,
@@ -2326,30 +2362,30 @@ local adapter = Rivals.new({
     isInputCaptured = function()
         return inputCaptured
     end,
+    limn = {
+        createCanvas = function()
+            return {
+                create = function(_self, kind)
+                    assert(kind == "Line")
+                    local node = {
+                        properties = {},
+                    }
+                    function node:patch(properties)
+                        self.properties = properties
+                    end
+                    table.insert(trajectoryNodes, node)
+                    return node
+                end,
+                destroy = function()
+                    trajectoryDestroyed = true
+                end,
+            }
+        end,
+        supportsPrimitive = function(_self, kind)
+            return kind == "Line"
+        end,
+    },
     oh = {
-        drawing = {
-            createSurface = function()
-                return {
-                    create = function(_self, kind)
-                        assert(kind == "Line")
-                        local node = {
-                            properties = {},
-                        }
-                        function node:set(properties)
-                            self.properties = properties
-                        end
-                        table.insert(trajectoryNodes, node)
-                        return node
-                    end,
-                    destroy = function()
-                        trajectoryDestroyed = true
-                    end,
-                }
-            end,
-            supports = function(kind)
-                return kind == "Line"
-            end,
-        },
         targeting = targeting,
     },
     observeThrowables = function(camera, environmentID)
