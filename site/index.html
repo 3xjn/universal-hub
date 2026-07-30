@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta
+    name="description"
+    content="Universal Hub is a focused Roblox game-adapter hub with tuned tools for RIVALS, Counter Blox, and Town."
+  />
+  <meta name="theme-color" content="#0b0c0d" />
+  <meta property="og:title" content="Universal Hub" />
+  <meta
+    property="og:description"
+    content="One hub. Tuned for every game it supports."
+  />
+  <meta
+    property="og:image"
+    content="https://3xjn.github.io/universal-hub/assets/screenshots/rivals-arena.png"
+  />
+  <title>Universal Hub</title>
+  <link rel="icon" href="assets/icon.png" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Universal Hub home">
+      <img src="assets/icon.png" alt="" width="42" height="42" />
+      <span>Universal Hub</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="#games">Games</a>
+      <a href="#load">Loader</a>
+      <a href="https://github.com/3xjn/universal-hub">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">GAME-AWARE ROBLOX HUB</p>
+        <h1 id="hero-title">One hub.<br />Tuned for every game it supports.</h1>
+        <p class="hero-intro">
+          Universal Hub changes with the game you launch. Every adapter gets
+          purpose-built controls, visuals, and workflows instead of a pile of
+          generic switches.
+        </p>
+        <a class="primary-link" href="#games">Explore the games</a>
+      </div>
+
+      <div class="loader-panel" id="load">
+        <div class="panel-heading">
+          <div>
+            <span class="panel-kicker">QUICK START</span>
+            <h2>One line. Fresh every time.</h2>
+          </div>
+          <span class="support">Volt + Potassium</span>
+        </div>
+        <div class="code-shell">
+          <code id="loader-code">loadstring(request({ Url = "https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/loader.lua?cacheBust=" .. game:GetService("HttpService"):GenerateGUID(false), Method = "GET", Headers = { ["Cache-Control"] = "no-cache" } }).Body, "universal-hub/loader.lua")()</code>
+          <button class="copy-button" type="button" data-copy-loader>
+            Copy loader
+          </button>
+        </div>
+        <p class="loader-note">
+          Press <kbd>Right Shift</kbd> to hide or restore the menu.
+          <span class="copy-status" role="status" aria-live="polite"></span>
+        </p>
+      </div>
+    </section>
+
+    <section class="games" id="games" aria-labelledby="games-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">SUPPORTED GAMES</p>
+          <h2 id="games-title">Pick the game. See exactly what you get.</h2>
+        </div>
+        <p>Click any game image to open it on Roblox.</p>
+      </div>
+
+      <article class="game-card game-rivals" aria-labelledby="rivals-title">
+        <div class="game-media">
+          <a
+            class="game-image-link"
+            href="https://www.roblox.com/games/17625359962"
+            aria-label="Open RIVALS on Roblox"
+          >
+            <img
+              class="game-image"
+              src="assets/screenshots/rivals-arena.png"
+              alt="RIVALS arena artwork"
+              data-gallery-main="rivals"
+            />
+          </a>
+          <div class="thumbnails" role="group" aria-label="RIVALS screenshots">
+            <button
+              class="thumbnail is-active"
+              type="button"
+              data-gallery="rivals"
+              data-src="assets/screenshots/rivals-arena.png"
+              data-alt="RIVALS arena artwork"
+              aria-label="Show RIVALS arena artwork"
+              aria-pressed="true"
+            >
+              <img src="assets/screenshots/rivals-arena.png" alt="" />
+            </button>
+            <button
+              class="thumbnail"
+              type="button"
+              data-gallery="rivals"
+              data-src="assets/screenshots/rivals-duel.png"
+              data-alt="RIVALS duel artwork"
+              aria-label="Show RIVALS duel artwork"
+              aria-pressed="false"
+            >
+              <img src="assets/screenshots/rivals-duel.png" alt="" />
+            </button>
+          </div>
+        </div>
+
+        <div class="game-details">
+          <div class="game-title-row">
+            <span class="game-number">01</span>
+            <h3 id="rivals-title">RIVALS</h3>
+            <span class="game-type">FPS</span>
+          </div>
+          <p class="game-summary">
+            Fine control over how you aim, what you see, and how the arena
+            feels without burying the useful options.
+          </p>
+          <div class="feature-groups">
+            <section class="feature-group">
+              <h4>Aim</h4>
+              <ul>
+                <li>Camera Aim</li>
+                <li>Silent Aim</li>
+                <li>Human Aim</li>
+                <li>Trigger Bot</li>
+                <li>Aim Smoothness</li>
+              </ul>
+            </section>
+            <section class="feature-group">
+              <h4>Awareness</h4>
+              <ul>
+                <li>Player ESP</li>
+                <li>Chams</li>
+                <li>Names</li>
+                <li>Health</li>
+                <li>Weapons</li>
+                <li>Utility ESP</li>
+              </ul>
+            </section>
+            <section class="feature-group">
+              <h4>Tuning</h4>
+              <ul>
+                <li>Headshot Rate</li>
+                <li>Miss Rate</li>
+                <li>Always Scoped</li>
+              </ul>
+            </section>
+            <section class="feature-group">
+              <h4>Movement & effects</h4>
+              <ul>
+                <li>Bhop</li>
+                <li>No Flash</li>
+                <li>No Smoke</li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </article>
+
+      <article class="game-card game-counter" aria-labelledby="counter-title">
+        <div class="game-media">
+          <a
+            class="game-image-link"
+            href="https://www.roblox.com/games/114234929420007"
+            aria-label="Open Counter Blox on Roblox"
+          >
+            <img
+              class="game-image"
+              src="assets/screenshots/counter-map.png"
+              alt="Counter Blox map artwork"
+              data-gallery-main="counter"
+              loading="lazy"
+            />
+          </a>
+          <div class="thumbnails" role="group" aria-label="Counter Blox screenshots">
+            <button
+              class="thumbnail is-active"
+              type="button"
+              data-gallery="counter"
+              data-src="assets/screenshots/counter-map.png"
+              data-alt="Counter Blox map artwork"
+              aria-label="Show Counter Blox map artwork"
+              aria-pressed="true"
+            >
+              <img src="assets/screenshots/counter-map.png" alt="" loading="lazy" />
+            </button>
+            <button
+              class="thumbnail"
+              type="button"
+              data-gallery="counter"
+              data-src="assets/screenshots/counter-bomb.png"
+              data-alt="Counter Blox bomb artwork"
+              aria-label="Show Counter Blox bomb artwork"
+              aria-pressed="false"
+            >
+              <img src="assets/screenshots/counter-bomb.png" alt="" loading="lazy" />
+            </button>
+          </div>
+        </div>
+
+        <div class="game-details">
+          <div class="game-title-row">
+            <span class="game-number">02</span>
+            <h3 id="counter-title">Counter Blox</h3>
+            <span class="game-type">TACTICAL FPS</span>
+          </div>
+          <p class="game-summary">
+            Combat, movement, intel, and cosmetics tuned around Counter Blox
+            weapons and round flow.
+          </p>
+          <div class="feature-groups">
+            <section class="feature-group">
+              <h4>Combat</h4>
+              <ul>
+                <li>Silent Aim</li>
+                <li>Trigger Bot</li>
+                <li>Wallbang</li>
+                <li>Knife Aura</li>
+                <li>Rapid Fire</li>
+              </ul>
+            </section>
+            <section class="feature-group">
+              <h4>Awareness</h4>
+              <ul>
+                <li>Player ESP</li>
+                <li>Chams</li>
+                <li>Utility ESP</li>
+                <li>Bomb Timer</li>
+              </ul>
+            </section>
+            <section class="feature-group">
+              <h4>Weapon control</h4>
+              <ul>
+                <li>No Spread</li>
+                <li>No Recoil</li>
+                <li>No Weapon Slow</li>
+                <li>No Flash</li>
+                <li>No Smoke</li>
+              </ul>
+            </section>
+            <section class="feature-group">
+              <h4>Movement & style</h4>
+              <ul>
+                <li>Bhop</li>
+                <li>Micro Step</li>
+                <li>Spin Bot</li>
+                <li>Weapon Skins</li>
+                <li>Gloves</li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </article>
+
+      <article class="game-card game-town" aria-labelledby="town-title">
+        <div class="game-media">
+          <a
+            class="game-image-link"
+            href="https://www.roblox.com/games/4991214437"
+            aria-label="Open Town on Roblox"
+          >
+            <img
+              class="game-image"
+              src="assets/screenshots/town-city.png"
+              alt="Town city artwork"
+              data-gallery-main="town"
+              loading="lazy"
+            />
+          </a>
+          <div class="thumbnails" role="group" aria-label="Town screenshots">
+            <button
+              class="thumbnail is-active"
+              type="button"
+              data-gallery="town"
+              data-src="assets/screenshots/town-city.png"
+              data-alt="Town city artwork"
+              aria-label="Show Town city artwork"
+              aria-pressed="true"
+            >
+              <img src="assets/screenshots/town-city.png" alt="" loading="lazy" />
+            </button>
+            <button
+              class="thumbnail"
+              type="button"
+              data-gallery="town"
+              data-src="assets/screenshots/town-nowhereville.png"
+              data-alt="Town Nowhereville artwork"
+              aria-label="Show Town Nowhereville artwork"
+              aria-pressed="false"
+            >
+              <img src="assets/screenshots/town-nowhereville.png" alt="" loading="lazy" />
+            </button>
+            <button
+              class="thumbnail"
+              type="button"
+              data-gallery="town"
+              data-src="assets/screenshots/town-hub.png"
+              data-alt="Universal Hub Town plot-copy panel"
+              aria-label="Show the Universal Hub Town plot-copy panel"
+              aria-pressed="false"
+            >
+              <img src="assets/screenshots/town-hub.png" alt="" loading="lazy" />
+            </button>
+          </div>
+        </div>
+
+        <div class="game-details">
+          <div class="game-title-row">
+            <span class="game-number">03</span>
+            <h3 id="town-title">Town</h3>
+            <span class="game-type">BUILDING</span>
+          </div>
+          <p class="game-summary">
+            A full plot-copy workflow for large builds, with clear preflight
+            information and recovery when a session gets interrupted.
+          </p>
+          <div class="feature-groups">
+            <section class="feature-group">
+              <h4>Plot copying</h4>
+              <ul>
+                <li>Player Selection</li>
+                <li>Full-Build Copy</li>
+                <li>Programmatic Save</li>
+                <li>No Arbitrary Part Cap</li>
+              </ul>
+            </section>
+            <section class="feature-group">
+              <h4>Preflight</h4>
+              <ul>
+                <li>Supported-Part Count</li>
+                <li>Work Estimate</li>
+                <li>Time Estimate</li>
+                <li>Unsupported-Part Summary</li>
+              </ul>
+            </section>
+            <section class="feature-group">
+              <h4>Progress & safety</h4>
+              <ul>
+                <li>Chunked Copy</li>
+                <li>Truthful Progress</li>
+                <li>Cancellation</li>
+                <li>Cleanup</li>
+              </ul>
+            </section>
+            <section class="feature-group">
+              <h4>Recovery</h4>
+              <ul>
+                <li>Private Checkpoints</li>
+                <li>Resume After Rejoin</li>
+                <li>Compatibility Check</li>
+                <li>Discard Incomplete Copy</li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <footer>
+    <img src="assets/icon.png" alt="" width="32" height="32" />
+    <p>Universal Hub <span aria-hidden="true">·</span> <span data-year></span></p>
+    <a href="https://github.com/3xjn/universal-hub">Source on GitHub</a>
+  </footer>
+</body>
+</html>
