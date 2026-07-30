@@ -9,6 +9,7 @@ local Rivals = {
         "silentAim",
         "shotAim",
         "triggerBot",
+        "autoPickup",
         "alwaysScoped",
         "humanAim",
         "bhop",
@@ -39,6 +40,9 @@ local Rivals = {
 
 local TRIGGER_INTERVAL = 0.1
 local TRIGGER_RADIUS = 8
+local GUN_GAME_PLACE_ID = 133215910299950
+local PICKUP_SCAN_INTERVAL = 0.1
+local PICKUP_RETRY_INTERVAL = 0.5
 local MAX_OBSERVATION_DISTANCE = 2000
 local PRACTICE_DUMMY_HEALTH = 150
 local RICOCHET_CACHE_INTERVAL = 0.15
@@ -104,9 +108,128 @@ function Rivals.isOpponent(localPlayer, player, character)
     return localTeam == nil or playerTeam == nil or localTeam ~= playerTeam
 end
 
-function Rivals.isTargetable(localPlayer, player, character)
-    return Rivals.isOpponent(localPlayer, player, character)
-        and character:FindFirstChildOfClass("ForceField") == nil
+function Rivals.isGunGamePlace(placeId)
+    return placeId == GUN_GAME_PLACE_ID
+end
+
+function Rivals.capabilitiesFor(context)
+    context = context or {}
+    local autoPickupAvailable = Rivals.isGunGamePlace(context.placeId)
+        and context.fireTouchInterestAvailable == true
+    local capabilities = {}
+    for _, capability in ipairs(Rivals.capabilities) do
+        if capability ~= "autoPickup" or autoPickupAvailable then
+            table.insert(capabilities, capability)
+        end
+    end
+    return capabilities
+end
+
+function Rivals.entityIsInvincible(entity)
+    if type(entity) ~= "table" then
+        return false
+    end
+
+    if type(entity.Get) == "function" then
+        local succeeded, value = pcall(entity.Get, entity, "IsInvincible")
+        if succeeded and value ~= nil then
+            return value == true
+        end
+    end
+
+    local data = entity.Data
+    return type(data) == "table" and data.IsInvincible == true
+end
+
+function Rivals.lowestHealthObservation(observations, validate, nearest)
+    local lowestHealth = math.huge
+    local lowest = {}
+    for _, observation in ipairs(observations or {}) do
+        local accepted = validate(observation)
+        local health = accepted and accepted.health
+        if type(health) == "number" and health > 0 then
+            if health < lowestHealth then
+                lowestHealth = health
+                lowest = { accepted }
+            elseif health == lowestHealth then
+                table.insert(lowest, accepted)
+            end
+        end
+    end
+    if #lowest == 0 then
+        return nil
+    end
+    return nearest(lowest)
+end
+
+function Rivals.pickupType(instance)
+    if not instance
+        or instance.Name ~= "_drop"
+        or type(instance.IsA) ~= "function"
+        or not instance:IsA("BasePart")
+        or type(instance.FindFirstChild) ~= "function"
+    then
+        return nil
+    end
+
+    if instance:FindFirstChild("Health") then
+        return "Health"
+    end
+    if instance:FindFirstChild("AmmoBalanced") then
+        return "AmmoBalanced"
+    end
+    return nil
+end
+
+function Rivals.shouldCollectPickup(kind, fighter)
+    if kind == "Health" then
+        local entity = fighter and fighter.Entity
+        local humanoid = entity and entity.Humanoid
+        return humanoid ~= nil
+            and type(humanoid.Health) == "number"
+            and type(humanoid.MaxHealth) == "number"
+            and humanoid.Health > 0
+            and humanoid.Health < humanoid.MaxHealth
+    end
+
+    if kind ~= "AmmoBalanced" then
+        return false
+    end
+
+    local item = fighter and fighter.EquippedItem
+    local data = item and item.Data
+    local info = item and item.Info
+    if type(data) ~= "table" or type(info) ~= "table" then
+        return item ~= nil
+    end
+
+    local knownCapacity = false
+    if type(data.Ammo) == "number" and type(info.MaxAmmo) == "number" then
+        knownCapacity = true
+        if data.Ammo < info.MaxAmmo then
+            return true
+        end
+    end
+    if type(data.AmmoReserve) == "number"
+        and type(info.MaxAmmoReserve) == "number"
+    then
+        knownCapacity = true
+        if data.AmmoReserve < info.MaxAmmoReserve then
+            return true
+        end
+    end
+    return not knownCapacity
+end
+
+function Rivals.isTargetable(localPlayer, player, character, fighter, placeId)
+    if not Rivals.isOpponent(localPlayer, player, character)
+        or character:FindFirstChildOfClass("ForceField") ~= nil
+    then
+        return false
+    end
+
+    return not Rivals.isGunGamePlace(placeId)
+        or not Rivals.entityIsInvincible(fighter and fighter.Entity)
 end
 
 function Rivals.new(context)
@@ -205,6 +328,10 @@ function Rivals.new(context)
     local humanAimCharacter
     local humanAimState
     local renderDelta = 1 / 60
+    local pickupState = {
+        attemptedAt = setmetatable({}, { __mode = "k" }),
+        nextScanAt = 0,
+    }
     local observations = {}
     local self = {}
     local getNetworkPing = context.getNetworkPing or function()
@@ -313,7 +440,61 @@ function Rivals.new(context)
     end
 
     local function isTargetable(player, character)
-        return Rivals.isTargetable(LocalPlayer, player, character)
+        return Rivals.isTargetable(
+            LocalPlayer,
+            player,
+            character,
+            fighterFor(player),
+            game.PlaceId
+        )
+    end
+
+    local function updateAutoPickup()
+        local settings = store:Get().settings
+        if settings.autoPickup ~= true
+            or not Rivals.isGunGamePlace(game.PlaceId)
+            or type(context.fireTouchInterest) ~= "function"
+            or not localFighterIsActive()
+            or not localFighterIsInCombat()
+        then
+            return
+        end
+
+        local now = clock()
+        if now < pickupState.nextScanAt then
+            return
+        end
+        pickupState.nextScanAt = now + PICKUP_SCAN_INTERVAL
+
+        local fighter = FighterController.LocalFighter
+        local entity = fighter and fighter.Entity
+        local touchPart = entity and entity.RootPart
+        if not touchPart or type(Workspace.GetChildren) ~= "function" then
+            return
+        end
+
+        for _, candidate in ipairs(Workspace:GetChildren()) do
+            local kind = Rivals.pickupType(candidate)
+            local lastAttemptAt = pickupState.attemptedAt[candidate]
+            if kind
+                and candidate.Parent == Workspace
+                and Rivals.shouldCollectPickup(kind, fighter)
+                and (lastAttemptAt == nil or now - lastAttemptAt >= PICKUP_RETRY_INTERVAL)
+            then
+                pickupState.attemptedAt[candidate] = now
+                spawn(function()
+                    if stopped or candidate.Parent ~= Workspace then
+                        return
+                    end
+                    local touched = pcall(context.fireTouchInterest, touchPart, candidate, 1)
+                    if not touched then
+                        return
+                    end
+                    (context.wait or task.wait)()
+                    pcall(context.fireTouchInterest, touchPart, candidate, 0)
+                end)
+            end
+        end
     end
 
     local function selectTarget(maxScreenDistance, includeBlocked)
@@ -329,30 +510,74 @@ function Rivals.new(context)
             options.maxScreenDistance = settings.fov
         end
         local function nearest(values)
+            local eligible = {}
+            for _, observation in ipairs(values) do
+                if observation.player == observation.character
+                    or isTargetable(observation.player, observation.character)
+                then
+                    table.insert(eligible, observation)
+                end
+            end
             if settings.humanAim then
                 local camera = Workspace.CurrentCamera
                 local cameraFrame = camera
                     and (camera.GetRenderCFrame and camera:GetRenderCFrame() or camera.CFrame)
                 return Targeting.closestObservation(
-                    values,
+                    eligible,
                     cameraFrame and cameraFrame.Position,
                     options
                 )
             end
-            return targeting.nearestObservation(values, options)
+            return targeting.nearestObservation(eligible, options)
         end
         local selected
-        selected, aimTargetKey = Targeting.selectObservation(
-            observations,
-            aimTargetKey,
-            nearest
-        )
+        if Rivals.isGunGamePlace(game.PlaceId) then
+            local fighter = FighterController.LocalFighter
+            local item = fighter and fighter.EquippedItem
+            local camera = Workspace.CurrentCamera
+            local cameraFrame = camera
+                and (camera.GetRenderCFrame and camera:GetRenderCFrame() or camera.CFrame)
+            local origin = cameraFrame and cameraFrame.Position
+            local function accepted(observation)
+                if not includeBlocked and observation.visible ~= true then
+                    return nil
+                end
+                return nearest({ observation })
+            end
+            local function finishable(observation)
+                local candidate = accepted(observation)
+                local distance = candidate
+                    and origin
+                    and candidate.position
+                    and (candidate.position - origin).Magnitude
+                local damage = candidate
+                    and WeaponPolicy.finishingDamage(item, candidate, distance)
+                return type(damage) == "number"
+                    and type(candidate.health) == "number"
+                    and damage >= candidate.health
+                    and candidate
+                    or nil
+            end
+            selected = Rivals.lowestHealthObservation(observations, finishable, nearest)
+                or Rivals.lowestHealthObservation(observations, accepted, nearest)
+                or nearest(observations)
+            aimTargetKey = selected
+                and (selected.character or selected.player or selected.part)
+                or nil
+        else
+            selected, aimTargetKey = Targeting.selectObservation(
+                observations,
+                aimTargetKey,
+                nearest
+            )
+        end
         return selected
     end
 
     local function selectBackstabTarget(localPosition, info, acquisitionDistance)
         local nearest
         local nearestDistance = math.huge
+        local lowestHealth = math.huge
         for _, observation in ipairs(observations) do
             local character = observation.character
             local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -368,10 +593,18 @@ function Rivals.new(context)
                 and plan
             then
                 local distance = (localPosition - root.Position).Magnitude
-                if distance < nearestDistance then
+                local health = type(observation.health) == "number"
+                        and observation.health
+                    or math.huge
+                local preferred = Rivals.isGunGamePlace(game.PlaceId)
+                        and (health < lowestHealth
+                            or health == lowestHealth and distance < nearestDistance)
+                    or not Rivals.isGunGamePlace(game.PlaceId) and distance < nearestDistance
+                if preferred then
                     nearest = table.clone(observation)
                     nearest.backstabPlan = plan
                     nearestDistance = distance
+                    lowestHealth = health
                 end
             end
         end
@@ -754,7 +987,10 @@ function Rivals.new(context)
         end
         local weaponName = WeaponPolicy.itemName(item)
         local energyRifle = weaponName == "Energy Rifle"
-        local knife = weaponName == "Knife"
+        local knife = WeaponPolicy.isBackstabKnife(
+            item,
+            Rivals.isGunGamePlace(game.PlaceId)
+        )
         local slingshot = weaponName == "Slingshot"
         local splashProjectile = ProjectileAim.isSplashProjectile(item)
         local entity = fighter and fighter.Entity
@@ -1185,9 +1421,14 @@ function Rivals.new(context)
             releaseFire()
             return
         end
-        if WeaponPolicy.itemName(item) == "Knife" then
+        if WeaponPolicy.isBackstabKnife(item, Rivals.isGunGamePlace(game.PlaceId)) then
             releaseFire()
-            if not WeaponPolicy.backstabTriggerReady(fighter, item, alignedTarget) then
+            if not WeaponPolicy.backstabTriggerReady(
+                fighter,
+                item,
+                alignedTarget,
+                Rivals.isGunGamePlace(game.PlaceId)
+            ) then
                 return
             end
             if triggerHeld then
@@ -1327,6 +1568,7 @@ function Rivals.new(context)
             renderDelta = deltaTime
         end
 
+        updateAutoPickup()
         local visibleCount = updateObservations()
         local activeWeapon = equippedWeapon(LocalPlayer)
         local settings = store:Get().settings
@@ -1365,7 +1607,10 @@ function Rivals.new(context)
         else
             shotPresentation:clear()
         end
-        suppressBhopJump = WeaponPolicy.itemName(fighter and fighter.EquippedItem) == "Knife"
+        suppressBhopJump = WeaponPolicy.isBackstabKnife(
+            fighter and fighter.EquippedItem,
+            Rivals.isGunGamePlace(game.PlaceId)
+        )
             and alignedTarget ~= nil
             and alignedTarget.knifePath ~= nil
         movement:update()

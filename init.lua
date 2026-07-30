@@ -77,6 +77,7 @@ assert(
 
 local defaultSettings = {
     aimSmoothness = 0,
+    autoPickup = false,
     bhop = false,
     boxes = true,
     bombTimer = true,
@@ -209,8 +210,15 @@ local function setThirdPerson(enabled)
     end
 end
 
+local adapterCapabilities = type(adapterDefinition.capabilitiesFor) == "function"
+        and adapterDefinition.capabilitiesFor({
+            fireTouchInterestAvailable = type(environment.firetouchinterest) == "function",
+            gameId = game.GameId,
+            placeId = game.PlaceId,
+        })
+    or adapterDefinition.capabilities
 overlay = Overlay.new({
-    capabilities = adapterDefinition.capabilities,
+    capabilities = adapterCapabilities,
     cosmetics = adapterDefinition.cosmetics,
     cycleGlove = function(direction)
         adapter:cycleGlove(direction)
@@ -310,6 +318,9 @@ local created, result = pcall(adapterDefinition.new, {
     aimPress = mouse2press,
     aimRelease = mouse2release,
     click = mouse1click,
+    fireTouchInterest = type(environment.firetouchinterest) == "function"
+            and environment.firetouchinterest
+        or nil,
     press = mouse1press,
     release = mouse1release,
     gcObjects = function()

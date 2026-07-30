@@ -941,6 +941,7 @@ store:Patch({ menuVisible = true })
 local rivalsOverlay = Overlay.new({
     capabilities = {
         "aimSmoothness",
+        "autoPickup",
         "humanAim",
         "alwaysScoped",
         "silentAim",
@@ -1004,6 +1005,11 @@ assert(
     "Game adapters must share the same composed Drawing shell and toggle primitives"
 )
 assert(rivalsOverlay.controls.options.triggerBot ~= nil)
+assert(
+    rivalsOverlay.controls.options.autoPickup.label.Text == "Auto Pickup"
+        and rivalsOverlay.controls.sections.world ~= nil,
+    "Supported Gun Game sessions must expose Auto Pickup in the WORLD section"
+)
 assert(
     rivalsOverlay.controls.options.alwaysScoped.label.Text == "Always Scoped",
     "RIVALS must expose the Always Scoped option"

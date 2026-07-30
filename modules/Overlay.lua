@@ -27,6 +27,13 @@ local OPTION_GROUPS = {
         },
     },
     {
+        id = "world",
+        label = "WORLD",
+        rows = {
+            { "autoPickup" },
+        },
+    },
+    {
         id = "visuals",
         label = "VISUALS",
         rows = {
@@ -40,6 +47,7 @@ local OPTION_GROUPS = {
 }
 
 local OPTION_LABELS = {
+    autoPickup = "Auto Pickup",
     bhop = "Bunny Hop",
     bombTimer = "Bomb Timer",
     rapidFire = "Rapid Fire",

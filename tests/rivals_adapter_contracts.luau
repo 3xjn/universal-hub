@@ -29,6 +29,147 @@ assert(
         and table.find(Rivals.capabilities, "missRate")
 )
 assert(not table.find(Rivals.capabilities, "wallbang"), "RIVALS must not advertise unverified hit forgery")
+assert(Rivals.isGunGamePlace(133215910299950) == true)
+assert(Rivals.isGunGamePlace(17625359962) == false)
+assert(
+    Rivals.entityIsInvincible({
+        Get = function(_self, key)
+            assert(key == "IsInvincible")
+            return true
+        end,
+    }) == true,
+    "Gun Game spawn protection must use the live replicated entity getter"
+)
+assert(
+    Rivals.entityIsInvincible({
+        Get = function()
+            error("Missing replicated value")
+        end,
+        Data = {
+            IsInvincible = true,
+        },
+    }) == true,
+    "Gun Game spawn protection must fall back to replicated entity data"
+)
+assert(
+    Rivals.entityIsInvincible({
+        Get = function()
+            return nil
+        end,
+        Data = {
+            IsInvincible = true,
+        },
+    }) == true,
+    "An unset entity getter must not hide replicated spawn-invincibility data"
+)
+assert(Rivals.entityIsInvincible({ Data = { IsInvincible = false } }) == false)
+assert(Rivals.entityIsInvincible(nil) == false)
+
+do
+local highHealth = { health = 80, id = "high" }
+local lowestHealth = { health = 15, id = "lowest" }
+local rejectedHealth = { health = 1, id = "rejected" }
+local selected = Rivals.lowestHealthObservation(
+    { highHealth, rejectedHealth, lowestHealth },
+    function(observation)
+        return observation ~= rejectedHealth and observation or nil
+    end,
+    function(observations)
+        return observations[1]
+    end
+)
+assert(
+    selected == lowestHealth,
+    "Gun Game targeting must prefer the lowest-health opponent accepted by normal targeting"
+)
+
+local firstTie = { health = 20, id = "first-tie" }
+local nearestTie = { health = 20, id = "nearest-tie" }
+selected = Rivals.lowestHealthObservation(
+    { highHealth, firstTie, nearestTie },
+    function(observation)
+        return observation
+    end,
+    function(observations)
+        assert(#observations == 2)
+        return observations[2]
+    end
+)
+assert(
+    selected == nearestTie,
+    "Gun Game low-health ties must retain the existing nearest/crosshair ordering"
+)
+end
+
+do
+local function pickupDrop(kind)
+    return {
+        Name = "_drop",
+        FindFirstChild = function(_self, name)
+            return name == kind and {} or nil
+        end,
+        IsA = function(_self, className)
+            return className == "BasePart"
+        end,
+    }
+end
+
+local healthDrop = pickupDrop("Health")
+local ammoDrop = pickupDrop("AmmoBalanced")
+assert(Rivals.pickupType(healthDrop) == "Health")
+assert(Rivals.pickupType(ammoDrop) == "AmmoBalanced")
+assert(Rivals.pickupType(pickupDrop("Unknown")) == nil)
+assert(Rivals.pickupType({ Name = "_drop" }) == nil)
+
+local pickupFighter = {
+    Entity = {
+        Humanoid = {
+            Health = 60,
+            MaxHealth = 100,
+        },
+    },
+    EquippedItem = {
+        Data = {
+            Ammo = 2,
+            AmmoReserve = 80,
+        },
+        Info = {
+            MaxAmmo = 13,
+            MaxAmmoReserve = 91,
+        },
+    },
+}
+assert(Rivals.shouldCollectPickup("Health", pickupFighter) == true)
+pickupFighter.Entity.Humanoid.Health = 100
+assert(Rivals.shouldCollectPickup("Health", pickupFighter) == false)
+assert(Rivals.shouldCollectPickup("AmmoBalanced", pickupFighter) == true)
+pickupFighter.EquippedItem.Data.Ammo = 13
+pickupFighter.EquippedItem.Data.AmmoReserve = 91
+assert(Rivals.shouldCollectPickup("AmmoBalanced", pickupFighter) == false)
+assert(Rivals.shouldCollectPickup("Unknown", pickupFighter) == false)
+
+assert(
+    table.find(Rivals.capabilitiesFor({
+        fireTouchInterestAvailable = true,
+        placeId = 133215910299950,
+    }), "autoPickup") ~= nil,
+    "Supported Gun Game sessions must show Auto Pickup"
+)
+assert(
+    table.find(Rivals.capabilitiesFor({
+        fireTouchInterestAvailable = true,
+        placeId = 17625359962,
+    }), "autoPickup") == nil,
+    "Other RIVALS modes must hide Auto Pickup"
+)
+assert(
+    table.find(Rivals.capabilitiesFor({
+        fireTouchInterestAvailable = false,
+        placeId = 133215910299950,
+    }), "autoPickup") == nil,
+    "Gun Game must hide Auto Pickup when the executor cannot synthesize touch"
+)
+end
 
 local readinessCamera = {}
 local readinessDuel = {}
@@ -96,6 +237,26 @@ assert(
 assert(
     Rivals.isTargetable(player(nil), player(nil), protectedFfaCharacter) == false,
     "Camera Aim, Human Aim, Trigger Bot, and backstab targeting must exclude spawn-protected players"
+)
+assert(
+    Rivals.isTargetable(
+        player(nil),
+        player(nil),
+        character(150),
+        { Entity = { Data = { IsInvincible = true } } },
+        133215910299950
+    ) == false,
+    "Gun Game automation must exclude the replicated spawn-invincibility state"
+)
+assert(
+    Rivals.isTargetable(
+        player(nil),
+        player(nil),
+        character(150),
+        { Entity = { Data = { IsInvincible = true } } },
+        17625359962
+    ) == true,
+    "The replicated Gun Game immunity check must not change other RIVALS modes"
 )
 assert(
     Rivals.isOpponent(localPlayer, player("Red", "MatchB"), character(150)) == false,
@@ -1678,6 +1839,11 @@ local fighterModule = {
     },
     _player_to_fighter = {
         [enemyPlayer] = {
+            Entity = {
+                Data = {
+                    IsInvincible = false,
+                },
+            },
             EquippedItem = targetShield,
         },
     },
@@ -1800,6 +1966,9 @@ cameraHarness.camera = {
 }
 local Workspace = {
     CurrentCamera = cameraHarness.camera,
+    GetChildren = function(self)
+        return self.pickupChildren or {}
+    end,
 }
 function cameraHarness.frameForRotation(value)
     return CFrame.new(origin)
@@ -2136,6 +2305,7 @@ local Players = {
     LocalPlayer = localPlayer,
 }
 game = {
+    PlaceId = 133215910299950,
     GetService = function(_self, name)
         return ({
             Players = Players,
@@ -2238,6 +2408,7 @@ local releases = 0
 local aimPresses = 0
 local aimReleases = 0
 local aimClicks = 0
+cameraHarness.pickupTouches = {}
 local currentTime = 10
 local ricochetSolves = 0
 local slingshotSolves = 0
@@ -2305,6 +2476,13 @@ local adapter = Rivals.new({
             triggerCameraDataAtClick, triggerRayAtClick =
                 cameraDataHook(fighterModule.LocalFighter)
         end
+    end,
+    fireTouchInterest = function(part, targetPart, toggle)
+        table.insert(cameraHarness.pickupTouches, {
+            part = part,
+            target = targetPart,
+            toggle = toggle,
+        })
     end,
     collectionService = {
         GetTagged = function(_self, tag)
@@ -2467,6 +2645,143 @@ assert(
 )
 assert(clicks == 0, "Camera Aim must not fire unless Trigger Bot is enabled")
 
+do
+local enemyFighter = fighterModule._player_to_fighter[enemyPlayer]
+local wasInShootingRange = fighterModule.LocalFighter.Data.IsInShootingRange
+fighterModule.LocalFighter.Data.IsInShootingRange = false
+enemyFighter.Entity.Data.IsInvincible = true
+currentTime += 1
+local immuneRotationCalls = rotationCalls
+local immuneClicks = clicks
+local immuneAimClicks = aimClicks
+renderCallback()
+assert(
+    table.find(rendered.observations, observations[1]) ~= nil,
+    "Gun Game ESP must keep showing spawn-immune opponents"
+)
+assert(
+    rotationCalls == immuneRotationCalls,
+    "Gun Game Camera Aim must not target a spawn-immune opponent"
+)
+
+settings.silentAim = false
+settings.shotAim = true
+settings.triggerBot = true
+currentTime += 1
+renderCallback()
+cameraHarness.runCameraRenderFrame()
+currentTime += 1 / 60
+renderCallback()
+assert(
+    rotationCalls == immuneRotationCalls
+        and clicks == immuneClicks
+        and aimClicks == immuneAimClicks,
+    "Gun Game Silent Aim and Trigger Bot must not act on a spawn-immune opponent"
+)
+
+enemyFighter.Entity.Data.IsInvincible = false
+settings.silentAim = true
+settings.shotAim = false
+settings.triggerBot = false
+currentTime += 1
+renderCallback()
+assert(
+    rotationCalls == immuneRotationCalls + 1,
+    "Gun Game Camera Aim must resume as soon as replicated spawn immunity ends"
+)
+fighterModule.LocalFighter.Data.IsInShootingRange = wasInShootingRange
+end
+
+do
+local function livePickup(kind)
+    return {
+        Name = "_drop",
+        Parent = Workspace,
+        FindFirstChild = function(_self, name)
+            return name == kind and {} or nil
+        end,
+        IsA = function(_self, className)
+            return className == "BasePart"
+        end,
+    }
+end
+
+local healthPickup = livePickup("Health")
+local ammoPickup = livePickup("AmmoBalanced")
+local pickupRoot = {
+    Position = origin,
+}
+local fighter = fighterModule.LocalFighter
+local previousRoot = fighter.Entity.RootPart
+local previousMaxHealth = fighter.Entity.Humanoid.MaxHealth
+local previousHealth = fighter.Entity.Humanoid.Health
+local previousData = localItem.Data
+local previousInfo = localItem.Info
+
+fighter.Entity.RootPart = pickupRoot
+fighter.Entity.Humanoid.Health = 60
+fighter.Entity.Humanoid.MaxHealth = 100
+localItem.Data = {
+    Ammo = 2,
+    AmmoReserve = 80,
+}
+localItem.Info = {
+    DisplayName = "Handgun",
+    MaxAmmo = 13,
+    MaxAmmoReserve = 91,
+}
+Workspace.pickupChildren = { healthPickup, ammoPickup }
+settings.autoPickup = true
+currentTime += 1
+renderCallback()
+assert(
+    #cameraHarness.pickupTouches == 4
+        and cameraHarness.pickupTouches[1].part == pickupRoot
+        and cameraHarness.pickupTouches[1].target == healthPickup
+        and cameraHarness.pickupTouches[1].toggle == 1
+        and cameraHarness.pickupTouches[2].target == healthPickup
+        and cameraHarness.pickupTouches[2].toggle == 0
+        and cameraHarness.pickupTouches[3].target == ammoPickup
+        and cameraHarness.pickupTouches[3].toggle == 1
+        and cameraHarness.pickupTouches[4].target == ammoPickup
+        and cameraHarness.pickupTouches[4].toggle == 0,
+    "Gun Game Auto Pickup must follow Volt's Touched-then-TouchEnded sequence"
+)
+
+currentTime += 0.1
+renderCallback()
+assert(
+    #cameraHarness.pickupTouches == 4,
+    "Auto Pickup must throttle repeated touches for a surviving drop"
+)
+
+fighter.Entity.Humanoid.Health = 100
+localItem.Data.Ammo = 13
+localItem.Data.AmmoReserve = 91
+currentTime += 1
+renderCallback()
+assert(
+    #cameraHarness.pickupTouches == 4,
+    "Auto Pickup must preserve full health and ammo drops"
+)
+
+fighter.Entity.Humanoid.Health = 60
+localItem.Data.Ammo = 2
+game.PlaceId = 17625359962
+currentTime += 1
+renderCallback()
+assert(#cameraHarness.pickupTouches == 4, "Auto Pickup must not run outside Gun Game")
+
+game.PlaceId = 133215910299950
+settings.autoPickup = false
+Workspace.pickupChildren = {}
+fighter.Entity.RootPart = previousRoot
+fighter.Entity.Humanoid.Health = previousHealth
+fighter.Entity.Humanoid.MaxHealth = previousMaxHealth
+localItem.Data = previousData
+localItem.Info = previousInfo
+end
+
 local challengerPosition = targetPosition + Vector3.new(6, 0, 0)
 local challenger = {
     character = character(150),
@@ -2475,6 +2790,7 @@ local challenger = {
     screenDistance = 10,
     visible = true,
 }
+game.PlaceId = 17625359962
 table.insert(observations, 1, challenger)
 renderCallback()
 assert(
@@ -2490,6 +2806,26 @@ assert(
 table.remove(observations, 1)
 observations[1].screenDistance = 40
 renderCallback()
+game.PlaceId = 133215910299950
+
+do
+local lowHealthPosition = targetPosition + Vector3.new(-4, 0, 0)
+local lowHealthTarget = {
+    character = character(20),
+    player = enemyPlayer,
+    position = lowHealthPosition,
+    screenDistance = 20,
+    visible = true,
+}
+table.insert(observations, 1, lowHealthTarget)
+currentTime += 1
+renderCallback()
+assert(
+    cameraModule.Rotation == RivalsTargeting.rotationToward(origin, lowHealthPosition),
+    "Gun Game must switch to the lowest-health eligible opponent"
+)
+table.remove(observations, 1)
+end
 
 do
     settings.silentAim = false
@@ -3485,14 +3821,24 @@ fighterModule.LocalFighter.Entity.RootPart = {
     AssemblyLinearVelocity = Vector3.zero,
     Position = targetPosition + Vector3.xAxis * 18.5,
 }
-localItem.Name = "Knife"
+localItem.Name = "Glast Shard"
+localItem._backstab_hash = 0
 localItem.Info = {
     AttackReach = 6,
     HeavyAttackCooldown = 1.25,
     HeavyAttackReach = 7,
     CriticalDamage = 150,
-    DisplayName = "Knife",
+    DisplayName = "Glast Shard",
 }
+assert(
+    RivalsWeaponPolicy.isBackstabKnife(localItem, true) == true
+        and RivalsWeaponPolicy.isBackstabKnife(localItem, false) == false,
+    "Gun Game must recognize the final Knife by its verified backstab-capable item shape"
+)
+assert(
+    game.PlaceId == 133215910299950,
+    "Final-weapon Knife contracts must run under the Gun Game place gate"
+)
 grounded = true
 observations[1].visible = true
 observations[1].screenDistance = settings.fov + 100
@@ -3526,16 +3872,32 @@ assert(
     "Knife Camera Aim must lock only from a lethal rear position"
 )
 assert(
-    clicks == backstabClicks and aimClicks == backstabAimClicks,
-    "Knife Trigger Bot must not backstab from a stale airborne rear window"
+    clicks == backstabClicks and aimClicks == backstabAimClicks + 1,
+    "Gun Game final-Knife Trigger Bot must right-click from current lethal rear geometry"
 )
 grounded = true
 currentTime += 1 / 60
 renderCallback()
 assert(
     clicks == backstabClicks and aimClicks == backstabAimClicks + 1,
-    "Knife Trigger Bot must use secondary fire from current grounded lethal rear geometry"
+    "Gun Game final-Knife Trigger Bot must respect the heavy-attack cooldown after right-clicking"
 )
+
+settings.silentAim = false
+settings.shotAim = true
+currentTime += 2
+cameraHarness.silentKnifeAimClicks = aimClicks
+renderCallback()
+cameraHarness.runCameraRenderFrame()
+currentTime += 1 / 60
+renderCallback()
+assert(
+    aimClicks == cameraHarness.silentKnifeAimClicks + 1,
+    "Gun Game final-Knife Silent Aim must present a rear target before Trigger Bot right-clicks"
+)
+cameraHarness.silentKnifeAimClicks = nil
+settings.shotAim = false
+settings.silentAim = true
 
 settings.bhop = true
 wHeld = false
@@ -3562,6 +3924,7 @@ renderCallback()
 fighterModule.LocalFighter.IsSliding = localItem._testKnifeIsSlidingMethod
 localItem._testKnifeHighJumpCalls = nil
 localItem._testKnifeIsSlidingMethod = nil
+localItem._backstab_hash = nil
 
 target.character.FindFirstChildOfClass = function(_self, className)
     if className == "Humanoid" then
