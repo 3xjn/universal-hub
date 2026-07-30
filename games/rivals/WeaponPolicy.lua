@@ -47,6 +47,26 @@ function WeaponPolicy.itemName(item)
     return item.Name
 end
 
+function WeaponPolicy.isBackstabKnife(item, allowBackstabShape)
+    local name = WeaponPolicy.itemName(item)
+    if name == "Knife" then
+        return true
+    end
+    if allowBackstabShape ~= true
+        or name ~= "Glast Shard"
+        or type(item) ~= "table"
+    then
+        return false
+    end
+
+    local info = item.Info
+    return type(info) == "table"
+        and type(item._backstab_hash) == "number"
+        and type(info.CriticalDamage) == "number"
+        and type(info.HeavyAttackReach) == "number"
+        and type(info.HeavyAttackCooldown) == "number"
+end
+
 function WeaponPolicy.automationPolicy(item)
     return UTILITY_AUTOMATION_POLICIES[WeaponPolicy.itemName(item)]
         or DEFAULT_AUTOMATION_POLICY
@@ -150,7 +170,7 @@ function WeaponPolicy.backstabReady(localPosition, observation, info)
     return plan ~= nil and plan.ready == true
 end
 
-function WeaponPolicy.backstabTriggerReady(fighter, item, target)
+function WeaponPolicy.backstabTriggerReady(fighter, item, target, allowAirborne)
     local entity = fighter and fighter.Entity
     local localRoot = entity and entity.RootPart
     local isGrounded = fighter and fighter.IsGrounded
@@ -163,7 +183,7 @@ function WeaponPolicy.backstabTriggerReady(fighter, item, target)
     end
     if not localRoot
         or typeof(localRoot.Position) ~= "Vector3"
-        or grounded ~= true
+        or allowAirborne ~= true and grounded ~= true
         or type(item) ~= "table"
         or type(item.Info) ~= "table"
         or not target
@@ -445,6 +465,30 @@ function WeaponPolicy.damageAtDistance(item, observation, distance)
 
     local alpha = math.clamp((distance - startDistance) / (endDistance - startDistance), 0, 1)
     return baseDamage * (1 + (minimumMultiplier - 1) * alpha)
+end
+
+function WeaponPolicy.finishingDamage(item, observation, distance)
+    local damage = WeaponPolicy.damageAtDistance(item, observation, distance)
+    local info = item and item.Info
+    if type(damage) ~= "number" or type(info) ~= "table" then
+        return nil
+    end
+
+    if WeaponPolicy.itemName(item) == "Burst Rifle" and type(info.BurstCount) == "number" then
+        damage *= math.max(1, info.BurstCount)
+    end
+
+    local multipliers = info.ChargeLevelDamageMultipliers
+    if type(multipliers) == "table" then
+        local maximum = 1
+        for _, multiplier in ipairs(multipliers) do
+            if type(multiplier) == "number" then
+                maximum = math.max(maximum, multiplier)
+            end
+        end
+        damage *= maximum
+    end
+    return damage
 end
 
 function WeaponPolicy.triggerDamageReady(item, observation, distance)
