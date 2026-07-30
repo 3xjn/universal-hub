@@ -15,7 +15,7 @@
 ## Load
 
 ```lua
-loadstring(request({ Url = "https://raw.githubusercontent.com/3xjn/universal-hub/refs/heads/main/loader.lua?cacheBust=" .. game:GetService("HttpService"):GenerateGUID(false), Method = "GET", Headers = { ["Cache-Control"] = "no-cache" } }).Body, "universal-hub/loader.lua")()
+loadstring(game:HttpGet("https://3xjn.github.io/universal-hub/bootstrap.lua?v="..tick()))()
 ```
 
 Works with Volt and Potassium; press `Right Shift` to toggle the menu.
