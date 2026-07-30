@@ -49,6 +49,7 @@ local MenuToggle = import("modules/MenuToggle")
 local Registry = import("modules/Registry")
 local Session = import("modules/Session")
 local Overlay = import("modules/Overlay")
+local TownCheckpointStore = import("games/town/CheckpointStore")
 local Counterblox = import("games/Counterblox")
 local Town = import("games/Town")
 local Rivals = import("games/rivals/Adapter")
@@ -135,6 +136,31 @@ if not hasPersistedConfig then
     end
 end
 
+local townCheckpoint
+if adapterDefinition.id == "town" then
+    townCheckpoint = TownCheckpointStore.new({
+        decode = function(source)
+            return HttpService:JSONDecode(source)
+        end,
+        deleteFile = type(delfile) == "function" and delfile or nil,
+        encode = function(value)
+            return HttpService:JSONEncode(value)
+        end,
+        isFile = type(isfile) == "function" and isfile or nil,
+        listFiles = type(listfiles) == "function" and listfiles or nil,
+        makeFolder = type(makefolder) == "function" and makefolder or nil,
+        readFile = type(readfile) == "function" and readfile or nil,
+        root = configuration.TownCopyCheckpointRoot or "universal-hub/private/town-copy",
+        userId = LocalPlayer.UserId,
+        writeFile = type(writefile) == "function" and writefile or nil,
+    })
+    if townCheckpoint.available then
+        pcall(function()
+            townCheckpoint:prune()
+        end)
+    end
+end
+
 local store = Store.new({
     activeWeapon = nil,
     activeWeaponKind = nil,
@@ -157,8 +183,10 @@ local store = Store.new({
     observations = {},
     plotCopy = {
         active = false,
+        confirmedProgress = 0,
+        context = "",
         phase = "Ready",
-        progress = 0,
+        state = "idle",
     },
     bombObservation = {
         visible = false,
@@ -244,10 +272,70 @@ overlay = Overlay.new({
         end)
         return true
     end,
+    cancelPlotCopy = function()
+        if adapter and type(adapter.cancelCopy) == "function" then
+            task.spawn(function()
+                adapter:cancelCopy()
+            end)
+            return true
+        end
+        return false, "Plot copy cancellation is not ready"
+    end,
+    confirmPlotCopy = function()
+        if adapter and type(adapter.confirmCopy) == "function" then
+            task.spawn(function()
+                adapter:confirmCopy()
+            end)
+            return true
+        end
+        return false, "Plot copy confirmation is not ready"
+    end,
+    discardPlotCopy = function()
+        if adapter and type(adapter.discardCopy) == "function" then
+            task.spawn(function()
+                adapter:discardCopy()
+            end)
+            return true
+        end
+        return false, "Plot copy discard is not ready"
+    end,
+    resumePlotCopy = function()
+        if adapter and type(adapter.resumeCopy) == "function" then
+            task.spawn(function()
+                adapter:resumeCopy()
+            end)
+            return true
+        end
+        return false, "Plot copy resume is not ready"
+    end,
+    retryPlotCopyCleanup = function()
+        if adapter and type(adapter.retryCopyCleanup) == "function" then
+            task.spawn(function()
+                adapter:retryCopyCleanup()
+            end)
+            return true
+        end
+        return false, "Plot copy cleanup is not ready"
+    end,
+    cleanupPlotCopyCheckpoint = function()
+        if adapter and type(adapter.cleanupCopyCheckpoint) == "function" then
+            task.spawn(function()
+                adapter:cleanupCopyCheckpoint()
+            end)
+            return true
+        end
+        return false, "Local copy recovery cleanup is not ready"
+    end,
     reportPlotCopyError = function(message)
         store:Patch({
-            error = message,
-            status = message,
+            plotCopy = {
+                active = false,
+                confirmedProgress = 0,
+                context = message,
+                error = message,
+                phase = "Copy blocked",
+                state = "error",
+            },
         })
     end,
     uiParent = (function()
@@ -375,7 +463,19 @@ local created, result = pcall(adapterDefinition.new, {
     effects = RivalsEffects,
     movement = RivalsMovement,
     combatState = RivalsCombatState,
+    checkpoint = townCheckpoint,
+    gameId = game.GameId,
+    generateGuid = function()
+        return HttpService:GenerateGUID(false)
+    end,
+    localPlayer = LocalPlayer,
+    jobId = game.JobId,
+    now = os.time,
+    placeId = game.PlaceId,
+    players = Players,
     store = store,
+    wait = task.wait,
+    workspace = Workspace,
 })
 if not created then
     overlay:destroy()
@@ -383,6 +483,22 @@ if not created then
     error(result, 0)
 end
 adapter = result
+if type(adapter.inspectCopyRecovery) == "function" then
+    local recovered, _recoveryError = pcall(function()
+        adapter:inspectCopyRecovery()
+    end)
+    if not recovered then
+        store:Patch({
+            plotCopy = {
+                active = false,
+                context = "Recovery inspection failed before any Town mutation",
+                error = "Persistent copy recovery could not be inspected",
+                phase = "Copy blocked",
+                state = "error",
+            },
+        })
+    end
+end
 
 session = Session.new({
     adapter = adapter,

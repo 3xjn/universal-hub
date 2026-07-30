@@ -53,7 +53,24 @@ local function startBootstrap()
     configuration = environment.UniversalHubConfig or {}
     configuration.LocalRoot = configuration.LocalRoot or "universal-hub/local"
     configuration.HydroxideRoot = configuration.HydroxideRoot or "hydroxide/local"
-    configuration.Import = nil
+    local importCache = {}
+    configuration.Import = function(path)
+        assert(
+            type(path) == "string"
+                and path:match("^[%w_/%-]+$") ~= nil
+                and not path:find("//", 1, true),
+            "Invalid local hub module path"
+        )
+        if importCache[path] ~= nil then
+            return importCache[path]
+        end
+        local file = path .. ".lua"
+        local source = readfile(configuration.LocalRoot .. "/" .. file)
+        local chunk, compileError = loadstring(source, file)
+        local result = assert(chunk, compileError)()
+        importCache[path] = result
+        return result
+    end
     environment.UniversalHubConfig = configuration
 
     local hydroxideConfiguration = environment.HydroxideConfig or {}

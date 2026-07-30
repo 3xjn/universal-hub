@@ -79,9 +79,24 @@ getgenv().oh = {
 }
 ]]
     end
+    if path:sub(1, #"universal-hub/local/") == "universal-hub/local/"
+        and path ~= "universal-hub/local/init.lua"
+    then
+        return fs.readFile(path:sub(#"universal-hub/local/" + 1))
+    end
     assert(path == "universal-hub/local/init.lua")
     return [[
-assert(getgenv().UniversalHubConfig.Import == nil, "Local loader must clear a stale remote Import seam")
+assert(
+    type(getgenv().UniversalHubConfig.Import) == "function",
+    "Local loader must install a fresh local Import seam"
+)
+local executionPlan = assert(getgenv().UniversalHubConfig.Import)(
+    "games/town/ExecutionPlan"
+)
+assert(
+    type(executionPlan) == "table" and type(executionPlan.compile) == "function",
+    "Local loader must resolve the production Town dependency graph"
+)
 assert(
     type(getgenv().oh.targeting.observeCharacter) == "function",
     "Local loader must refresh Hydroxide helpers before loading a game adapter"
@@ -110,7 +125,25 @@ assert(deferredResult == "local-loader-ok")
 assert(waitedForLoad, "Local loader must yield to Roblox startup when launched from autoexec")
 assert(exited == true, "Refreshing Hydroxide must let its initializer clean up the previous session")
 assert(loaded[1] == "hydroxide/local/init.lua" and loaded[2] == "universal-hub/local/init.lua")
-assert(#loaded == 2, "A duplicate local bootstrap must not initialize Hydroxide or the hub twice")
+local function loadedCount(path)
+    local count = 0
+    for _, loadedPath in ipairs(loaded) do
+        if loadedPath == path then
+            count += 1
+        end
+    end
+    return count
+end
+assert(
+    loadedCount("hydroxide/local/init.lua") == 1
+        and loadedCount("universal-hub/local/init.lua") == 1,
+    "A duplicate local bootstrap must not initialize Hydroxide or the hub twice"
+)
+assert(
+    loadedCount("universal-hub/local/games/town/ExecutionPlan.lua") == 1
+        and loadedCount("universal-hub/local/games/town/Canonical.lua") == 1,
+    "The local loader must read nested Town modules from its selected local root"
+)
 assert(duplicateDuringLoadResult == nil, "A duplicate local bootstrap during Hydroxide init must coalesce")
 
 waitedForLoad = false

@@ -1,10 +1,59 @@
 local roblox = require("@lune/roblox")
+local fs = require("@lune/fs")
 CFrame = roblox.CFrame
 Enum = roblox.Enum
 Vector2 = roblox.Vector2
 Vector3 = roblox.Vector3
 
 local Town = require("../games/Town")
+local townSource = fs.readFile("games/Town.lua")
+local initSource = fs.readFile("init.lua")
+
+assert(not townSource:find("MAX_PARTS", 1, true), "Town must not retain an arbitrary total-part cap")
+assert(not townSource:find("options.maxParts", 1, true), "Town must not accept a hidden maximum override")
+assert(not townSource:find("options.limit", 1, true), "Town production copy must not truncate to a prefix")
+assert(townSource:find("town/CopyEngine", 1, true), "Town must delegate durable execution to CopyEngine")
+assert(townSource:find("town/ExecutionPlan", 1, true), "Town must stream its execution graph")
+local preflightSource = assert(
+    townSource:match("function self:preflightCopy.-function self:copyPlot")
+)
+assert(
+    not preflightSource:find("GetDescendants()", 1, true),
+    "Production preflight must not retain an all-descendants array"
+)
+assert(
+    townSource:find("COMMAND_COOLDOWN_SECONDS = 6", 1, true),
+    "Town save and wiring commands must use the planned six-second scheduler tuning"
+)
+assert(
+    not townSource:find("status = phase", 1, true),
+    "Town copy phases must not duplicate themselves in the global Hub status"
+)
+assert(
+    initSource:find('import("games/town/CheckpointStore")', 1, true),
+    "Town bootstrap must load the private checkpoint store"
+)
+assert(
+    initSource:find("universal-hub/private/town-copy", 1, true),
+    "Town bootstrap must own the documented private checkpoint root"
+)
+for _, capability in ipairs({
+    "readFile",
+    "writeFile",
+    "isFile",
+    "deleteFile",
+    "makeFolder",
+    "listFiles",
+}) do
+    assert(
+        initSource:find(capability .. " =", 1, true),
+        "Town bootstrap must inject checkpoint capability " .. capability
+    )
+end
+assert(
+    initSource:find("inspectCopyRecovery", 1, true),
+    "Town startup must inspect compatible recovery state"
+)
 
 assert(Town.match({ gameId = 0, placeId = 4991214437 }) == 200)
 assert(Town.match({ gameId = 1718755273, placeId = 0 }) == 100)
@@ -66,6 +115,7 @@ assert(
 )
 
 assert(Town.validSaveName("exact_Save-name_17"))
+assert(Town.ownershipName("job-a", "Normal") ~= Town.ownershipName("job-b", "Normal"))
 assert(Town.validSaveName(string.rep("a", 32)))
 for _, invalidName in ipairs({
     "",
@@ -255,24 +305,6 @@ assert(
     "Town listPlotOwners must source sorted non-local player names from the live plot root"
 )
 
-local forwarded
-function adapter:copyNearbyPlot(options)
-    forwarded = options
-    return "copy-result"
-end
-local result = adapter:copyPlot("bravo", "My_Exact-Save", {
-    save = true,
-    preserve = "kept",
-})
-assert(result == "copy-result")
-assert(
-    forwarded.ownerName == "bravo"
-        and forwarded.saveName == "My_Exact-Save"
-        and forwarded.save == true
-        and forwarded.preserve == "kept",
-    "Town copyPlot must forward the selected owner and exact save name without rewriting either value"
-)
-
 local function fakePart(className, shape)
     local part = {
         Shape = shape or Enum.PartType.Block,
@@ -291,5 +323,50 @@ assert(Town.partType(fakePart("Part", Enum.PartType.Ball)) == "Ball")
 assert(Town.partType(fakePart("Part", Enum.PartType.Cylinder)) == "Cylinder")
 assert(Town.partType(fakePart("WedgePart")) == "Wedge")
 assert(Town.partType(fakePart("MeshPart")) == nil)
+
+local delegated = {}
+local fakeEngine = {}
+for _, method in ipairs({
+    "preflight",
+    "confirmStart",
+    "inspectRecovery",
+    "requestCancel",
+    "resume",
+    "discard",
+    "retryCleanup",
+    "cleanupLocalCheckpoint",
+    "stop",
+}) do
+    fakeEngine[method] = function(_, ...)
+        table.insert(delegated, {
+            arguments = { ... },
+            method = method,
+        })
+        return method .. "-result"
+    end
+end
+
+local facade = Town.new({
+    copyEngine = fakeEngine,
+    localPlayer = {
+        Name = "Local",
+    },
+    players = {},
+    store = {
+        Patch = function() end,
+    },
+    wait = function() end,
+    workspace = workspace,
+})
+assert(facade:preflightCopy("Source", "copy_Source") == "preflight-result")
+assert(facade:confirmCopy() == "confirmStart-result")
+assert(facade:cancelCopy() == "requestCancel-result")
+assert(facade:resumeCopy() == "resume-result")
+assert(facade:discardCopy() == "discard-result")
+assert(facade:retryCopyCleanup() == "retryCleanup-result")
+assert(facade:cleanupCopyCheckpoint() == "cleanupLocalCheckpoint-result")
+facade:stop()
+assert(delegated[1].method == "preflight")
+assert(delegated[#delegated].method == "stop")
 
 print("town-adapter-contracts-ok")

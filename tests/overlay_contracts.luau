@@ -1038,6 +1038,7 @@ rivalsOverlay:destroy()
 local plotOwnerRequests = 0
 local plotCopyRequests = {}
 local plotCopyErrors = {}
+local plotLifecycleRequests = {}
 local townOverlay = Overlay.new({
     capabilities = {
         "plotCopy",
@@ -1048,6 +1049,22 @@ local townOverlay = Overlay.new({
             ownerName = ownerName,
             saveName = saveName,
         })
+        return true
+    end,
+    cancelPlotCopy = function()
+        table.insert(plotLifecycleRequests, "cancel")
+        return true
+    end,
+    confirmPlotCopy = function()
+        table.insert(plotLifecycleRequests, "confirm")
+        return true
+    end,
+    cleanupPlotCopyCheckpoint = function()
+        table.insert(plotLifecycleRequests, "local_cleanup")
+        return true
+    end,
+    discardPlotCopy = function()
+        table.insert(plotLifecycleRequests, "discard")
         return true
     end,
     createInstance = createInstance,
@@ -1092,6 +1109,14 @@ local townOverlay = Overlay.new({
     reportPlotCopyError = function(message)
         table.insert(plotCopyErrors, message)
     end,
+    resumePlotCopy = function()
+        table.insert(plotLifecycleRequests, "resume")
+        return true
+    end,
+    retryPlotCopyCleanup = function()
+        table.insert(plotLifecycleRequests, "retry_cleanup")
+        return true
+    end,
     setInputCaptured = function() end,
     setMenuVisible = function() end,
     setOption = function() end,
@@ -1108,7 +1133,10 @@ assert(
         and plotCopy.saveInput
         and plotCopy.actionButton
         and plotCopy.actionLabel.Text == "Copy & Save"
+        and plotCopy.secondaryButton
+        and plotCopy.secondaryLabel
         and plotCopy.progressPhase
+        and plotCopy.progressContext
         and plotCopy.progressValue
         and plotCopy.progressTrack
         and plotCopy.progressFill,
@@ -1138,47 +1166,182 @@ assert(
     "Typing in the Town save-name input must preserve and display the exact value"
 )
 store:Patch({
+    status = "Town ready",
     plotCopy = {
         active = true,
+        confirmedProgress = 0.375,
+        context = "Batch 3/8",
         phase = "Creating copied parts",
-        progress = 0.375,
+        state = "copying",
     },
 })
 assert(
     plotCopy.progressPhase.Text == "Creating copied parts"
+        and plotCopy.progressContext.Text == "Batch 3/8"
         and plotCopy.progressValue.Text == "38%"
         and plotCopy.progressFill.Size == Vector2.new(276 * 0.375, 4)
-        and plotCopy.actionLabel.Text == "Copying...",
-    "Active Town plot copies must show their real phase, rounded percentage, fill, and busy action"
+        and plotCopy.actionLabel.Text == "Cancel",
+    "Active Town plot copies must show confirmed progress, distinct context, and cancellation"
 )
 plotCopy.actionButton.callbacks.click()
 assert(
     #plotCopyErrors == 0
-        and #plotCopyRequests == 0,
-    "An active Town plot copy must suppress duplicate Copy & Save requests"
+        and #plotCopyRequests == 0
+        and plotLifecycleRequests[#plotLifecycleRequests] == "cancel",
+    "An active Town plot copy action must request cancellation instead of another preflight"
 )
 store:Patch({
     plotCopy = {
         active = false,
-        phase = "Saved My_Exact-Save_42",
-        progress = 1,
+        confirmedProgress = 0,
+        context = "8434 supported · 124 planned calls · ETA uncalibrated",
+        phase = "Plan secured",
+        startAvailable = true,
+        state = "awaiting_confirmation",
     },
 })
 assert(
-    plotCopy.progressPhase.Text == "Saved My_Exact-Save_42"
-        and plotCopy.progressValue.Text == "100%"
-        and plotCopy.progressFill.Size == Vector2.new(276, 4)
-        and plotCopy.actionLabel.Text == "Copy & Save",
-    "A completed Town plot copy must visibly reach 100% and restore the action"
+    plotCopy.progressPhase.Text == "Plan secured"
+        and plotCopy.progressContext.Text == "8434 supported · 124 planned calls · ETA uncalibrated"
+        and plotCopy.progressValue.Text == "0%"
+        and plotCopy.actionLabel.Text == "Start copy"
+        and plotCopy.secondaryLabel.Text == "Cancel"
+        and plotCopy.secondaryButton.Visible == true,
+    "A secured Town plan must require explicit Start copy or Cancel"
 )
 plotCopy.actionButton.callbacks.click()
 assert(
     #plotCopyErrors == 0
-        and #plotCopyRequests == 1
+        and #plotCopyRequests == 0
+        and plotLifecycleRequests[#plotLifecycleRequests] == "confirm",
+    "Start copy must confirm the persisted plan without rerunning preflight"
+)
+plotCopy.secondaryButton.callbacks.click()
+assert(plotLifecycleRequests[#plotLifecycleRequests] == "cancel")
+
+for _, stateCase in ipairs({
+    { action = "Resume", context = "Last confirmed batch 7", expected = "resume", state = "paused", secondary = "Discard" },
+    { action = "Retry cleanup", context = "Checkpoint retained", expected = "retry_cleanup", state = "rollback_incomplete" },
+    {
+        action = "Retry cleanup",
+        context = "Cleanup was interrupted",
+        expected = "retry_cleanup",
+        retryCleanupAvailable = true,
+        state = "rollback",
+    },
+    {
+        action = "Clear local recovery",
+        context = "Finished build is preserved",
+        expected = "local_cleanup",
+        localCleanupAvailable = true,
+        state = "cleanup_pending",
+    },
+    {
+        action = "Resume",
+        context = "Authorized before relaunch",
+        expected = "resume",
+        resumeAvailable = true,
+        state = "copy_authorized",
+    },
+}) do
+    store:Patch({
+        plotCopy = {
+            active = false,
+            confirmedProgress = 0.4,
+            context = stateCase.context,
+            phase = stateCase.state == "paused" and "Copy paused" or "Recovery required",
+            localCleanupAvailable = stateCase.localCleanupAvailable == true,
+            resumeAvailable = stateCase.resumeAvailable == true,
+            retryCleanupAvailable = stateCase.retryCleanupAvailable == true,
+            state = stateCase.state,
+        },
+    })
+    assert(
+        plotCopy.actionLabel.Text == stateCase.action,
+        "Town recovery label mapping failed for " .. stateCase.state
+    )
+    if stateCase.secondary then
+        assert(plotCopy.secondaryLabel.Text == stateCase.secondary and plotCopy.secondaryButton.Visible)
+    end
+    plotCopy.actionButton.callbacks.click()
+    assert(
+        plotLifecycleRequests[#plotLifecycleRequests] == stateCase.expected,
+        "Town recovery action mapping failed for " .. stateCase.state
+    )
+end
+
+for _, stateCase in ipairs({
+    { action = "Retry", phase = "Copy blocked", state = "error" },
+    { action = "Cancel", phase = "Preparing copy", state = "preflight" },
+    { action = "Starting...", phase = "Starting copy", state = "copy_authorized" },
+    { action = "Cancelling...", phase = "Cancel requested", state = "cancel_requested" },
+    { action = "Cancel", phase = "Checking previous work", state = "reconciling" },
+    { action = "Cancel", phase = "Resuming copy", state = "resuming" },
+    { action = "Discarding...", phase = "Discarding checkpoint", state = "discarding" },
+    { action = "Cleaning...", phase = "Cleaning copied parts", state = "rollback" },
+    { action = "Saving...", phase = "Saving copy", state = "saving" },
+}) do
+    local context = stateCase.state .. " context"
+    store:Patch({
+        plotCopy = {
+            active = false,
+            confirmedProgress = 0.25,
+            context = context,
+            phase = stateCase.phase,
+            localCleanupAvailable = false,
+            resumeAvailable = false,
+            retryCleanupAvailable = false,
+            state = stateCase.state,
+        },
+    })
+    assert(
+        plotCopy.progressPhase.Text == stateCase.phase
+            and plotCopy.progressContext.Text == context
+            and plotCopy.actionLabel.Text == stateCase.action,
+        "Town canonical state mapping failed for " .. stateCase.state
+    )
+    assert(
+        not string.find(string.lower(store:Get().status), string.lower(stateCase.phase), 1, true)
+            and not string.find(string.lower(store:Get().status), string.lower(context), 1, true),
+        "Global status duplicated Town state " .. stateCase.state
+    )
+end
+
+store:Patch({
+    plotCopy = {
+        active = false,
+        confirmedProgress = 1,
+        context = "8434 supported parts confirmed",
+        phase = "Copy complete",
+        state = "completed",
+    },
+})
+assert(
+    plotCopy.progressValue.Text == "100%"
+        and plotCopy.actionLabel.Text == "Copy another"
+        and plotCopy.secondaryButton.Visible == false,
+    ("Completion must be terminal, truthful, and offer a new preflight (%s, %s, %s)"):format(
+        tostring(plotCopy.progressValue.Text),
+        tostring(plotCopy.actionLabel.Text),
+        tostring(plotCopy.secondaryButton.Visible)
+    )
+)
+plotCopy.actionButton.callbacks.click()
+assert(
+    #plotCopyRequests == 1
         and plotCopyRequests[1].ownerName == "Alpha"
         and plotCopyRequests[1].saveName == "My_Exact-Save_42",
-    "Copy & Save must pass the selected player and exact edited save name to copyPlot"
+    "Copy another must preflight the selected owner and exact save name"
 )
+for _, townMessage in ipairs({
+    plotCopy.progressPhase.Text,
+    plotCopy.progressContext.Text,
+}) do
+    assert(
+        townMessage == "" or not string.find(string.lower(store:Get().status), string.lower(townMessage), 1, true),
+        "Global status must not duplicate the canonical Town copy surface"
+    )
+end
 townOverlay:destroy()
 
 print("overlay-contracts-ok")
