@@ -35,6 +35,11 @@ luau-lsp analyze \
     modules/Registry.lua \
     modules/Session.lua \
     modules/Overlay.lua \
+    games/town/Canonical.lua \
+    games/town/CheckpointStore.lua \
+    games/town/CopyEngine.lua \
+    games/town/CopyPlan.lua \
+    games/town/ExecutionPlan.lua \
     games/Counterblox.lua \
     games/Town.lua \
     games/rivals/Adapter.lua \
@@ -57,6 +62,13 @@ lune run tests/menu_toggle_contracts.luau
 lune run tests/registry_contracts.luau
 lune run tests/session_contracts.luau
 lune run tests/overlay_contracts.luau
+lune run tests/town_canonical_contracts.luau
+lune run tests/town_checkpoint_contracts.luau
+lune run tests/town_copy_engine_contracts.luau
+lune run tests/town_copy_plan_contracts.luau
+TOWN_TEST_COUNT=256 lune run tests/town_large_copy_integration_contracts.luau
+lune run tests/town_large_copy_integration_contracts.luau
+lune run tests/town_second_review_contracts.luau
 lune run tests/counterblox_adapter_contracts.luau
 lune run tests/town_adapter_contracts.luau
 lune run tests/rivals_combat_state_contracts.luau

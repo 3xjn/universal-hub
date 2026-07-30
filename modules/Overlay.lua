@@ -400,9 +400,52 @@ function Overlay:_setPlotDropdownOpen(open)
     self:_layout()
 end
 
+function Overlay:_invokePlotLifecycle(callbackName)
+    local callback = self.context[callbackName]
+    if type(callback) ~= "function" then
+        self:_reportPlotCopyError("This plot copy action is not ready")
+        return
+    end
+    local succeeded, accepted, message = pcall(callback)
+    if not succeeded then
+        self:_reportPlotCopyError("Plot copy action failed")
+    elseif accepted == false then
+        self:_reportPlotCopyError(message or "Plot copy action could not start")
+    end
+end
+
 function Overlay:_triggerPlotCopy()
     local plotCopyState = self.context.store:Get().plotCopy
-    if plotCopyState and plotCopyState.active == true then
+    local state = plotCopyState and plotCopyState.state or "idle"
+    if plotCopyState.localCleanupAvailable then
+        self:_invokePlotLifecycle("cleanupPlotCopyCheckpoint")
+        return
+    elseif plotCopyState.retryCleanupAvailable then
+        self:_invokePlotLifecycle("retryPlotCopyCleanup")
+        return
+    elseif plotCopyState.resumeAvailable and state ~= "awaiting_confirmation" then
+        self:_invokePlotLifecycle("resumePlotCopy")
+        return
+    elseif state == "awaiting_confirmation" then
+        self:_invokePlotLifecycle("confirmPlotCopy")
+        return
+    elseif state == "rollback" or state == "rollback_incomplete" then
+        self:_invokePlotLifecycle("retryPlotCopyCleanup")
+        return
+    elseif state == "cleanup_pending" then
+        self:_invokePlotLifecycle("cleanupPlotCopyCheckpoint")
+        return
+    elseif state == "paused" then
+        self:_invokePlotLifecycle("resumePlotCopy")
+        return
+    elseif state == "copying"
+        or state == "preflight"
+        or state == "reconciling"
+        or state == "resuming"
+    then
+        self:_invokePlotLifecycle("cancelPlotCopy")
+        return
+    elseif state ~= "idle" and state ~= "completed" and state ~= "error" then
         return
     end
     if not self.selectedPlotOwner then
@@ -423,6 +466,15 @@ function Overlay:_triggerPlotCopy()
         self:_reportPlotCopyError("Plot copy could not start: " .. tostring(accepted))
     elseif accepted == false then
         self:_reportPlotCopyError(message or "Plot copy could not start")
+    end
+end
+
+function Overlay:_triggerPlotSecondaryAction()
+    local plotCopyState = self.context.store:Get().plotCopy or {}
+    if plotCopyState.state == "awaiting_confirmation" then
+        self:_invokePlotLifecycle("cancelPlotCopy")
+    elseif plotCopyState.state == "paused" then
+        self:_invokePlotLifecycle("discardPlotCopy")
     end
 end
 
@@ -526,10 +578,31 @@ function Overlay:_buildPlotCopy()
             Text = "Copy & Save",
             ZIndex = 203,
         }),
+        secondaryButton = self:_interactive(surface:create("Square", {
+            Color = COLORS.elevated,
+            Filled = true,
+            Size = Vector2.new(CONTENT_WIDTH, 26),
+            Visible = false,
+            ZIndex = 202,
+        })),
+        secondaryLabel = self:_text({
+            Center = true,
+            Color = COLORS.secondary,
+            Size = 12,
+            Text = "",
+            Visible = false,
+            ZIndex = 203,
+        }),
         progressPhase = self:_text({
             Color = COLORS.secondary,
             Size = 11,
             Text = "Ready",
+            ZIndex = 203,
+        }),
+        progressContext = self:_text({
+            Color = COLORS.secondary,
+            Size = 10,
+            Text = "",
             ZIndex = 203,
         }),
         progressValue = self:_text({
@@ -568,6 +641,9 @@ function Overlay:_buildPlotCopy()
     end)
     plotCopy.actionButton:on("click", function()
         self:_triggerPlotCopy()
+    end)
+    plotCopy.secondaryButton:on("click", function()
+        self:_triggerPlotSecondaryAction()
     end)
 
     if self.context.uiParent then
@@ -1567,16 +1643,19 @@ function Overlay:_layout()
 
         plotCopy.actionButton.Position = Vector2.new(x + 12, sectionY + 72)
         plotCopy.actionLabel.Position = Vector2.new(x + 150, sectionY + 80)
-        plotCopy.progressPhase.Position = Vector2.new(x + 14, sectionY + 111)
-        plotCopy.progressValue.Position = Vector2.new(x + 274, sectionY + 111)
-        plotCopy.progressTrack.Position = Vector2.new(x + 12, sectionY + 130)
+        plotCopy.secondaryButton.Position = Vector2.new(x + 12, sectionY + 108)
+        plotCopy.secondaryLabel.Position = Vector2.new(x + 150, sectionY + 114)
+        plotCopy.progressPhase.Position = Vector2.new(x + 14, sectionY + 143)
+        plotCopy.progressValue.Position = Vector2.new(x + 274, sectionY + 143)
+        plotCopy.progressContext.Position = Vector2.new(x + 14, sectionY + 161)
+        plotCopy.progressTrack.Position = Vector2.new(x + 12, sectionY + 180)
         plotCopy.progressFill.Position = plotCopy.progressTrack.Position
 
         for index, item in ipairs(self.plotDropdownItems) do
             item.row.Position = Vector2.new(x + 12, sectionY + 30 + (index - 1) * 26)
             item.label.Position = Vector2.new(x + 22, sectionY + 37 + (index - 1) * 26)
         end
-        sectionY = sectionY + 142
+        sectionY = sectionY + 192
     end
 
     self.optionsPanelHeight = sectionY - y + 12
@@ -1671,10 +1750,17 @@ function Overlay:_setMenuVisible(visible)
     local plotCopy = controls.plotCopy
     if plotCopy then
         for name, node in pairs(plotCopy) do
-            if name ~= "inputLayer" and name ~= "saveInput" then
+            if name ~= "inputLayer"
+                and name ~= "saveInput"
+                and name ~= "secondaryButton"
+                and name ~= "secondaryLabel"
+                and name ~= "secondaryVisible"
+            then
                 node.Visible = visible
             end
         end
+        plotCopy.secondaryButton.Visible = visible and plotCopy.secondaryVisible == true
+        plotCopy.secondaryLabel.Visible = visible and plotCopy.secondaryVisible == true
         for _, item in ipairs(self.plotDropdownItems) do
             setVisible(item, visible and self.plotDropdownOpen)
         end
@@ -1735,21 +1821,78 @@ function Overlay:_renderState(state)
     local plotCopy = controls.plotCopy
     if plotCopy then
         local plotCopyState = state.plotCopy or {}
-        local progress = math.clamp(plotCopyState.progress or 0, 0, 1)
+        local progress = math.clamp(
+            plotCopyState.confirmedProgress or plotCopyState.progress or 0,
+            0,
+            1
+        )
         local active = plotCopyState.active == true
+        local copyState = plotCopyState.state or (active and "copying" or "idle")
+        local hasError = copyState == "error" or copyState == "rollback_incomplete"
+        local primaryLabels = {
+            awaiting_confirmation = "Start copy",
+            cancel_requested = "Cancelling...",
+            cleanup_pending = "Cleanup pending",
+            completed = "Copy another",
+            copying = "Cancel",
+            copy_authorized = "Starting...",
+            discarding = "Discarding...",
+            error = "Retry",
+            idle = "Copy & Save",
+            paused = "Resume",
+            preflight = "Cancel",
+            reconciling = "Cancel",
+            resuming = "Cancel",
+            rollback = "Cleaning...",
+            rollback_incomplete = "Retry cleanup",
+            saving = "Saving...",
+        }
+        local primaryEnabled = copyState == "idle"
+            or copyState == "completed"
+            or copyState == "error"
+            or copyState == "awaiting_confirmation"
+            or copyState == "copying"
+            or copyState == "preflight"
+            or copyState == "reconciling"
+            or copyState == "resuming"
+            or copyState == "paused"
+            or copyState == "rollback_incomplete"
+            or copyState == "rollback"
+            or copyState == "cleanup_pending"
+        local secondaryLabel
+        if copyState == "awaiting_confirmation" then
+            secondaryLabel = "Cancel"
+        elseif copyState == "paused" then
+            secondaryLabel = "Discard"
+        end
         plotCopy.progressPhase.Text = compactText(plotCopyState.phase or "Ready", 34)
-        plotCopy.progressPhase.Color = state.error and COLORS.danger
+        plotCopy.progressPhase.Color = hasError and COLORS.danger
             or (active and COLORS.text or COLORS.secondary)
+        plotCopy.progressContext.Text = plotCopyState.context or ""
+        plotCopy.progressContext.Color = hasError and COLORS.danger or COLORS.secondary
         plotCopy.progressValue.Text = ("%d%%"):format(math.round(progress * 100))
         plotCopy.progressValue.Color = active and COLORS.accent or COLORS.secondary
         plotCopy.progressFill.Size = Vector2.new(CONTENT_WIDTH * progress, 4)
-        plotCopy.progressFill.Color = state.error and COLORS.danger or COLORS.accent
+        plotCopy.progressFill.Color = hasError and COLORS.danger or COLORS.accent
         self:_setControlColor(
             plotCopy.actionButton,
-            active and COLORS.panel or COLORS.accentSurface
+            primaryEnabled and COLORS.accentSurface or COLORS.panel
         )
-        plotCopy.actionLabel.Text = active and "Copying..." or "Copy & Save"
-        plotCopy.actionLabel.Color = active and COLORS.secondary or COLORS.accent
+        plotCopy.actionLabel.Text = plotCopyState.localCleanupAvailable
+                and "Clear local recovery"
+            or (plotCopyState.retryCleanupAvailable and "Retry cleanup")
+            or (
+                plotCopyState.resumeAvailable
+                    and copyState ~= "awaiting_confirmation"
+                    and "Resume"
+            )
+            or (primaryLabels[copyState] or "Working...")
+        plotCopy.actionLabel.Color = primaryEnabled and COLORS.accent or COLORS.secondary
+        local showSecondary = secondaryLabel ~= nil and state.menuVisible ~= false
+        plotCopy.secondaryVisible = secondaryLabel ~= nil
+        plotCopy.secondaryButton.Visible = showSecondary
+        plotCopy.secondaryLabel.Visible = showSecondary
+        plotCopy.secondaryLabel.Text = secondaryLabel or ""
     end
 
     for optionName, option in pairs(controls.options) do
