@@ -1,0 +1,8 @@
+# Mutable gate state. Copy to release/staging-gates.tsv after integration.
+# A pass receipt is release/evidence/<gate>.tsv#sha256=<digest>.
+gate	automated	pending	pending
+gate	performance	pending	pending
+gate	live-rivals	pending	pending
+gate	live-counterblox	pending	pending
+gate	live-town	pending	pending
+gate	cleanup	pending	pending

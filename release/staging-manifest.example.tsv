@@ -1,0 +1,7 @@
+# Immutable identity. Copy to release/staging-manifest.tsv after integration.
+schema	1
+channel	staging
+build	staging-20260804-example
+base	0000000000000000000000000000000000000000
+integration	1111111111111111111111111111111111111111
+candidate	game-registration-refactor	2222222222222222222222222222222222222222

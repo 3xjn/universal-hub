@@ -1,0 +1,3 @@
+[tools]
+luau-lsp = "JohnnyMorganz/luau-lsp@1.62.0"
+lune = "lune-org/lune@0.10.4"

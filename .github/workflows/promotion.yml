@@ -1,0 +1,107 @@
+name: promotion
+
+on:
+  pull_request_target:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      staging_ref:
+        description: Protected codex/staging-* branch to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || inputs.staging_ref }}
+      - name: Resolve trusted release scripts
+        id: trusted
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          STAGING_REF: ${{ inputs.staging_ref }}
+        run: |
+          mode=staging
+          branch="$STAGING_REF"
+          if [[ "$EVENT_NAME" == pull_request_target ]]; then
+            if [[ "$HEAD_REPOSITORY" != "$REPOSITORY" || "$HEAD_BRANCH" != codex/staging-* ]]; then
+              echo "Production PRs must come from this repository's codex/staging-* branch" >&2
+              exit 1
+            fi
+            mode=production
+            branch="$HEAD_BRANCH"
+            trusted_sha="$BASE_SHA"
+          else
+            if [[ "$GITHUB_REF" != refs/heads/main || "$branch" != codex/staging-* ]]; then
+              echo "Staging dispatches must run from main for a codex/staging-* branch" >&2
+              exit 1
+            fi
+            git fetch --quiet --no-tags origin main
+            trusted_sha=$(git rev-parse FETCH_HEAD)
+          fi
+          printf 'mode=%s\nbranch=%s\nsha=%s\n' "$mode" "$branch" "$trusted_sha" >> "$GITHUB_OUTPUT"
+          trusted_root="$RUNNER_TEMP/trusted-release"
+          mkdir -p "$trusted_root"
+          git show "$trusted_sha:rokit.toml" > "$trusted_root/rokit.toml"
+          git show "$trusted_sha:scripts/check.sh" > "$trusted_root/check.sh"
+          git show "$trusted_sha:scripts/check-promotion.sh" > "$trusted_root/check-promotion.sh"
+          chmod 700 "$trusted_root/check.sh" "$trusted_root/check-promotion.sh"
+      - name: Check immutable promotion receipt
+        env:
+          MODE: ${{ steps.trusted.outputs.mode }}
+          PROMOTION_BRANCH: ${{ steps.trusted.outputs.branch }}
+        run: "$RUNNER_TEMP/trusted-release/check-promotion.sh $MODE"
+      - name: Install pinned toolchain
+        run: |
+          archive="$RUNNER_TEMP/rokit.zip"
+          curl --fail --location --silent --show-error \
+            https://github.com/rojo-rbx/rokit/releases/download/v1.2.0/rokit-1.2.0-linux-x86_64.zip \
+            --output "$archive"
+          printf '%s  %s\n' \
+            951a7f3ec3d2a5e021fd1867d32f69f010ee4c2927f644b759578afc59c65fc0 \
+            "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP/rokit"
+          install -m 755 "$RUNNER_TEMP/rokit/rokit" "$RUNNER_TEMP/rokit-bin"
+          printf '%s\n' "$HOME/.rokit/bin" >> "$GITHUB_PATH"
+          (
+            cd "$RUNNER_TEMP/trusted-release"
+            "$RUNNER_TEMP/rokit-bin" install --no-trust-check
+          )
+      - name: Fetch pinned Hydroxide definitions
+        run: |
+          dependency="$RUNNER_TEMP/hydroxide"
+          git init --quiet "$dependency"
+          git -C "$dependency" remote add origin https://github.com/3xjn/hydroxide.git
+          git -C "$dependency" fetch --quiet --depth=1 origin \
+            c0bcd94dd43b84eaf4f0a9f87daab86b701a3682
+          git -C "$dependency" checkout --quiet --detach FETCH_HEAD
+          test "$(git -C "$dependency" rev-parse HEAD)" = \
+            c0bcd94dd43b84eaf4f0a9f87daab86b701a3682
+      - name: Run full repository check
+        run: |
+          REPOSITORY_ROOT="$GITHUB_WORKSPACE" \
+            HYDROXIDE_ROOT="$RUNNER_TEMP/hydroxide" \
+            PROMOTION_CHECK_SCRIPT="$RUNNER_TEMP/trusted-release/check-promotion.sh" \
+            TRUSTED_BASE_SHA="${{ steps.trusted.outputs.sha }}" \
+            "$RUNNER_TEMP/trusted-release/check.sh"
+
+  attest:
+    if: github.event_name == 'pull_request_target'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production-promotion
+    steps:
+      - name: Record manager approval
+        run: echo "The protected environment reviewer approved the immutable live and performance receipts."
