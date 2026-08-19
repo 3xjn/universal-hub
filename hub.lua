@@ -22,7 +22,7 @@ local limnChunk, limnError = loadstring(limnSource, "vendor/Limn.lua")
 local Limn = assert(limnChunk, limnError)()
 assert(type(Limn) == "table" and type(Limn.new) == "function", "Universal Hub requires Limn")
 
-local hydroxideCommit = "c0bcd94dd43b84eaf4f0a9f87daab86b701a3682"
+local hydroxideCommit = "cb1e184c27ffc7639b26cefd55e7f25978b9dcf7"
 local hydroxideSourceBaseUrl =
     ("https://raw.githubusercontent.com/3xjn/hydroxide/%s/"):format(hydroxideCommit)
 local hydroxideSources = {}

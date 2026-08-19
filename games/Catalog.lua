@@ -3,4 +3,5 @@ return {
     "games/rivals/Definition",
     "games/town/Definition",
     "games/bloxstrike/Definition",
+    "games/hoodrivals/Definition",
 }
