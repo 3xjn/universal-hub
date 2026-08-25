@@ -87,14 +87,57 @@ function playerDataController:GetDataChangedSignal(name)
     assert(name == "WeaponInventory")
     return weaponInventorySignal
 end
-function playerDataController:GetWeaponData(name)
-    for _, weapon in ipairs(weaponInventory) do
-        if weapon.Name == name then
-            return weapon
-        end
-    end
-    return nil
+function playerDataController:GetWeaponData()
+    error("cosmetic runtime must not trigger PlayerDataUtility's lazy require")
 end
+
+local function fakeViewModel(data)
+    local model = { Parent = "FirstPerson" }
+    function model:GetPivot()
+        return "pivot"
+    end
+    local viewModel = {
+        Data = data,
+        Model = model,
+        _is_equipped = true,
+    }
+    function viewModel:ToEnum(name)
+        return name
+    end
+    function viewModel:Serialize()
+        return { Data = table.clone(self.Data) }
+    end
+    function viewModel:Unequip()
+        self._is_equipped = false
+    end
+    function viewModel:Equip()
+        self._is_equipped = true
+    end
+    function viewModel:SetArmsData() end
+    function viewModel:SetParent(parent)
+        self.Model.Parent = parent
+    end
+    function viewModel:SetCFrame(pivot)
+        self.pivot = pivot
+    end
+    function viewModel:GetImage()
+        return "image:" .. self.Data.Name
+    end
+    function viewModel:Destroy()
+        self.destroyed = true
+    end
+    return viewModel
+end
+
+local viewModelBuilds = 0
+local clientViewModelLibrary = {}
+function clientViewModelLibrary.new(serial)
+    viewModelBuilds += 1
+    local replacement = fakeViewModel(serial.Data)
+    replacement._is_equipped = false
+    return replacement
+end
+local fighterController = { LocalFighter = nil }
 
 local equipmentState = {
     SelectedWeapon = "Assault Rifle",
@@ -126,10 +169,12 @@ local restoreWrites = {}
 local equippedWrites = {}
 local function runtime()
     return SkinUnlock.new({
+        clientViewModelLibrary = clientViewModelLibrary,
         cosmeticLibrary = cosmeticLibrary,
         equipmentState = equipmentState,
         equipmentStateLibrary = equipmentStateLibrary,
         equipCosmetic = equipCosmetic,
+        fighterController = fighterController,
         onEquippedChanged = function(cosmetics)
             table.insert(equippedWrites, SkinUnlock.encodeRestore(cosmetics))
         end,
@@ -137,6 +182,10 @@ local function runtime()
             table.insert(restoreWrites, SkinUnlock.encodeRestore(cosmetics))
         end,
         playerDataController = playerDataController,
+        getThreadIdentity = function()
+            return 8
+        end,
+        setThreadIdentity = function() end,
     })
 end
 
@@ -164,6 +213,26 @@ assert(not cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Emote", "Assault Rif
 assert(equipmentStateLibrary.SelectCosmetic ~= originalSelectCosmetic)
 assert(equipmentStateLibrary.SetCosmeticInvertedState ~= originalSetCosmeticInvertedState)
 
+local activeItem = {
+    Name = "Assault Rifle",
+    ViewModel = fakeViewModel({
+        Name = "Owned Skin",
+        Wrap = { Name = "Owned Wrap" },
+    }),
+}
+local hotbarIcon = { Image = "image:Owned Skin" }
+local equippedIcon = { Image = "image:Owned Skin" }
+fighterController.LocalFighter = {
+    EquippedItem = activeItem,
+    FighterInterface = {
+        Hotbar = {
+            _hotbar_slots = { { ClientItem = activeItem, Icon = hotbarIcon } },
+        },
+        EquippedDisplays = {
+            _equipped_displays = { { ClientItem = activeItem, WeaponIcon = equippedIcon } },
+        },
+    },
+}
 for cosmeticType, name in pairs({
     Skin = "Visible Skin",
     Wrap = "Visible Wrap",
@@ -178,6 +247,15 @@ for cosmeticType, name in pairs({
     end
     assert(weaponInventory[1][cosmeticType].Name == name)
 end
+local activeViewModel = fighterController.LocalFighter.EquippedItem.ViewModel
+assert(activeViewModel.Data.Name == "Visible Skin")
+assert(activeViewModel.Data.Wrap.Name == "Visible Wrap")
+assert(activeViewModel.Data.Wrap.Inverted == true)
+assert(activeViewModel.Data.Charm.Name == "Visible Charm")
+assert(activeViewModel.Model.Parent == "FirstPerson" and activeViewModel._is_equipped == true)
+assert(hotbarIcon.Image == "image:Visible Skin")
+assert(equippedIcon.Image == "image:Visible Skin")
+assert(viewModelBuilds >= 3, "local cosmetics must rebuild the native viewmodel")
 assert(weaponInventory[1].Wrap.Inverted == true)
 equipmentState.CustomizingType = "Wrap"
 equipmentStateLibrary.SetCosmeticInvertedState(equipmentState, false)
@@ -209,6 +287,10 @@ assert(equipmentStateLibrary.SetCosmeticInvertedState == originalSetCosmeticInve
 assert(weaponInventory[1].Skin.Name == "Owned Skin")
 assert(weaponInventory[1].Wrap.Name == "Owned Wrap")
 assert(weaponInventory[1].Charm == nil and weaponInventory[1].Finisher == nil)
+local restoredViewModel = fighterController.LocalFighter.EquippedItem.ViewModel
+assert(restoredViewModel.Data.Name == "Owned Skin")
+assert(restoredViewModel.Data.Wrap.Name == "Owned Wrap")
+assert(restoredViewModel.Data.Charm == nil)
 assert(weaponInventory[2].Skin == nil, "legacy unowned equipment must safely restore to none")
 assert(weaponInventory[3].Skin.Name == RANDOM)
 assert(weaponInventory[3].Skin.OnlyUseFavorites == true)
@@ -272,10 +354,12 @@ local function persistDisabledSetting(name, cosmetics)
     disabledStore:Patch({ settings = updated })
 end
 local disabledCleanup = SkinUnlock.new({
+    clientViewModelLibrary = clientViewModelLibrary,
     cosmeticLibrary = cosmeticLibrary,
     equipmentState = equipmentState,
     equipmentStateLibrary = equipmentStateLibrary,
     equipCosmetic = equipCosmetic,
+    fighterController = fighterController,
     onEquippedChanged = function(cosmetics)
         persistDisabledSetting("unlockAllCosmeticsEquipped", cosmetics)
     end,
@@ -283,6 +367,10 @@ local disabledCleanup = SkinUnlock.new({
         persistDisabledSetting("unlockAllSkinsRestore", cosmetics)
     end,
     playerDataController = playerDataController,
+    getThreadIdentity = function()
+        return 8
+    end,
+    setThreadIdentity = function() end,
 })
 disabledCleanup:update(disabledStore:Get().settings)
 assert(next(disabledStore:Get().settings.unlockAllSkinsRestore) == nil)
@@ -298,6 +386,8 @@ assert(table.find(Definition.sources, "games/rivals/features/SkinUnlock"))
 local adapterSource = fs.readFile("games/rivals/Adapter.lua")
 assert(adapterSource:find('require("./features/SkinUnlock")', 1, true))
 assert(adapterSource:find("skinUnlock:update(settings)", 1, true))
+assert(adapterSource:find("skinUnlock:step()", 1, true))
+assert(adapterSource:find("loadNativeModule", 1, true))
 assert(adapterSource:find('persistCosmeticSetting("unlockAllCosmeticsEquipped"', 1, true))
 assert(adapterSource:find("skinUnlock:stop()", 1, true))
 

@@ -4,6 +4,8 @@ SkinUnlock.__index = SkinUnlock
 local NONE_COSMETIC = "NONE_COSMETIC"
 local RANDOM_COSMETIC = "RANDOM_COSMETIC"
 local COSMETIC_TYPES = { "Skin", "Wrap", "Charm", "Finisher" }
+local SET_THREAD_IDENTITY = setthreadidentity or setidentity or setthreadcontext
+local GET_THREAD_IDENTITY = getthreadidentity or getidentity or getthreadcontext
 local SUPPORTED_TYPES = {}
 for _, cosmeticType in ipairs(COSMETIC_TYPES) do
     SUPPORTED_TYPES[cosmeticType] = true
@@ -117,6 +119,19 @@ local function applyEntry(weaponData, cosmeticType, entry)
     end
 end
 
+local function viewModelFingerprint(cosmetics)
+    local parts = {}
+    for _, cosmeticType in ipairs({ "Skin", "Wrap", "Charm" }) do
+        local entry = cosmetics and cosmetics[cosmeticType]
+        table.insert(
+            parts,
+            entry and table.concat({ cosmeticType, entry.name, tostring(entry.inverted) }, ":")
+                or ""
+        )
+    end
+    return table.concat(parts, "|")
+end
+
 function SkinUnlock.new(options)
     assert(options and type(options.cosmeticLibrary) == "table")
     assert(type(options.cosmeticLibrary.OwnsCosmetic) == "function")
@@ -126,16 +141,25 @@ function SkinUnlock.new(options)
     assert(type(options.equipmentStateLibrary.SelectCosmetic) == "function")
     assert(type(options.equipmentStateLibrary.SetCosmeticInvertedState) == "function")
     assert(type(options.equipmentState) == "table")
+    assert(type(options.clientViewModelLibrary) == "table")
+    assert(type(options.clientViewModelLibrary.new) == "function")
+    assert(type(options.fighterController) == "table")
 
     local self = setmetatable({
         applying = false,
+        clientViewModelLibrary = options.clientViewModelLibrary,
         cosmeticLibrary = options.cosmeticLibrary,
         enabled = nil,
         equipmentState = options.equipmentState,
         equipmentStateLibrary = options.equipmentStateLibrary,
         equipCosmetic = options.equipCosmetic,
         equipped = {},
+        fighterController = options.fighterController,
+        getThreadIdentity = options.getThreadIdentity or GET_THREAD_IDENTITY,
+        lastViewModel = nil,
+        lastViewModelFingerprint = nil,
         onEquippedChanged = options.onEquippedChanged or function() end,
+        setThreadIdentity = options.setThreadIdentity or SET_THREAD_IDENTITY,
         onRestoreChanged = options.onRestoreChanged or function() end,
         originalOwnsCosmetic = options.cosmeticLibrary.OwnsCosmetic,
         originalSelectCosmetic = options.equipmentStateLibrary.SelectCosmetic,
@@ -196,15 +220,153 @@ function SkinUnlock:_get(name)
 end
 
 function SkinUnlock:_getWeaponData(name)
-    if type(self.playerDataController.GetWeaponData) == "function" then
-        return self.playerDataController:GetWeaponData(name)
-    end
     for _, weapon in pairs(self:_get("WeaponInventory") or {}) do
         if type(weapon) == "table" and weapon.Name == name then
             return weapon
         end
     end
     return nil
+end
+
+function SkinUnlock:_resolveEntry(weaponName, cosmeticType, entry)
+    if not entry or entry.name ~= RANDOM_COSMETIC then
+        return entry
+    end
+    local candidates = {}
+    for name, info in pairs(self.cosmeticLibrary.Cosmetics) do
+        if
+            info.Type == cosmeticType
+            and info.Hidden ~= true
+            and (cosmeticType ~= "Skin" or info.ItemName == weaponName)
+        then
+            table.insert(candidates, name)
+        end
+    end
+    if #candidates == 0 then
+        return { name = NONE_COSMETIC }
+    end
+    local resolved = copyEntry(entry)
+    resolved.name = candidates[math.random(#candidates)]
+    return resolved
+end
+
+function SkinUnlock:_updateHud(fighter, item, viewModel)
+    local interface = fighter.FighterInterface
+    if not interface then
+        return
+    end
+    local image = viewModel:GetImage()
+    for _, slots in ipairs({
+        interface.Hotbar and interface.Hotbar._hotbar_slots,
+        interface.EquippedDisplays and interface.EquippedDisplays._equipped_displays,
+    }) do
+        for _, slot in pairs(slots or {}) do
+            if slot.ClientItem == item then
+                local icon = slot.Icon or slot.WeaponIcon
+                if icon then
+                    icon.Image = image
+                end
+            end
+        end
+    end
+end
+
+function SkinUnlock:_applyViewModelForWeapon(weaponName, cosmetics, force)
+    local fighter = self.fighterController.LocalFighter
+    local item = fighter and fighter.EquippedItem
+    local old = item and item.ViewModel
+    if not old or item.Name ~= weaponName or type(self.setThreadIdentity) ~= "function" then
+        return false
+    end
+
+    local fingerprint = viewModelFingerprint(cosmetics)
+    if not force and old == self.lastViewModel and fingerprint == self.lastViewModelFingerprint then
+        return false
+    end
+
+    local previousIdentity = 8
+    if type(self.getThreadIdentity) == "function" then
+        local success, identity = pcall(self.getThreadIdentity)
+        if success and type(identity) == "number" then
+            previousIdentity = identity
+        end
+    end
+    if not pcall(self.setThreadIdentity, 2) then
+        return false
+    end
+
+    local replacement
+    local wasEquipped = old._is_equipped == true
+    local success = pcall(function()
+        local serial = old:Serialize()
+        local data = serial[old:ToEnum("Data")]
+        local skin = self:_resolveEntry(weaponName, "Skin", cosmetics and cosmetics.Skin)
+        local wrap = self:_resolveEntry(weaponName, "Wrap", cosmetics and cosmetics.Wrap)
+        local charm = self:_resolveEntry(weaponName, "Charm", cosmetics and cosmetics.Charm)
+
+        if skin then
+            data[old:ToEnum("Name")] = skin.name == NONE_COSMETIC and weaponName or skin.name
+        end
+        for cosmeticType, entry in pairs({ Wrap = wrap, Charm = charm }) do
+            if entry then
+                local value
+                if entry.name ~= NONE_COSMETIC then
+                    value = { Name = entry.name }
+                    if cosmeticType == "Wrap" and type(entry.inverted) == "boolean" then
+                        value.Inverted = entry.inverted
+                    end
+                end
+                data[old:ToEnum(cosmeticType)] = value
+            end
+        end
+
+        replacement = self.clientViewModelLibrary.new(serial, item)
+        local parent = old.Model and old.Model.Parent
+        local pivot = old.Model and old.Model:GetPivot()
+        if wasEquipped then
+            old:Unequip()
+        end
+        item.ViewModel = replacement
+        replacement:SetArmsData(old._shirt_id, old._left_arm_color, old._right_arm_color)
+        replacement:SetParent(parent)
+        if pivot then
+            replacement:SetCFrame(pivot)
+        end
+        self:_updateHud(fighter, item, replacement)
+        if wasEquipped then
+            replacement:Equip(true)
+        end
+        old:Destroy()
+    end)
+    pcall(self.setThreadIdentity, previousIdentity)
+
+    if not success or not replacement then
+        item.ViewModel = old
+        if replacement then
+            pcall(replacement.Destroy, replacement)
+        end
+        if wasEquipped then
+            pcall(old.Equip, old, true)
+        end
+        return false
+    end
+
+    self.lastViewModel = replacement
+    self.lastViewModelFingerprint = fingerprint
+    return true
+end
+
+function SkinUnlock:step()
+    if not self.enabled then
+        return false
+    end
+    local fighter = self.fighterController.LocalFighter
+    local item = fighter and fighter.EquippedItem
+    local cosmetics = item and self.equipped[item.Name]
+    if not cosmetics or not (cosmetics.Skin or cosmetics.Wrap or cosmetics.Charm) then
+        return false
+    end
+    return self:_applyViewModelForWeapon(item.Name, cosmetics, false)
 end
 
 function SkinUnlock:_nativeOwns(inventory, name, weapon)
@@ -291,6 +453,9 @@ function SkinUnlock:_selectLocalCosmetic(state, cosmetic)
     self.equipped[weaponName] = self.equipped[weaponName] or {}
     self.equipped[weaponName][cosmeticType] = entry
     self:_applyLocalCosmetics()
+    if cosmeticType ~= "Finisher" then
+        self:_applyViewModelForWeapon(weaponName, self.equipped[weaponName], true)
+    end
     self.onEquippedChanged(copyCosmetics(self.equipped))
 end
 
@@ -323,6 +488,7 @@ function SkinUnlock:_setLocalWrapInverted(state, inverted)
     end
     entry.inverted = inverted
     self:_applyLocalCosmetics()
+    self:_applyViewModelForWeapon(weaponName, self.equipped[weaponName], true)
     self.onEquippedChanged(copyCosmetics(self.equipped))
 end
 
@@ -330,6 +496,7 @@ function SkinUnlock:_restoreCosmetics(restore)
     local cosmeticInventory = self:_get("CosmeticInventory") or {}
     for weaponName, cosmetics in pairs(restore) do
         local weaponData = self:_getWeaponData(weaponName)
+        local applied = {}
         if weaponData then
             for cosmeticType, saved in pairs(cosmetics) do
                 local entry = copyEntry(saved)
@@ -341,6 +508,7 @@ function SkinUnlock:_restoreCosmetics(restore)
                     then
                         entry = { name = NONE_COSMETIC }
                     end
+                    applied[cosmeticType] = entry
                     if not sameEntry(weaponData[cosmeticType], entry) then
                         pcall(
                             self.equipCosmetic.FireServer,
@@ -357,6 +525,7 @@ function SkinUnlock:_restoreCosmetics(restore)
                     end
                 end
             end
+            self:_applyViewModelForWeapon(weaponName, applied, true)
         end
     end
     self:_refresh("WeaponInventory")

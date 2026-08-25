@@ -174,6 +174,30 @@ function Rivals.new(context)
     local CollectionService = context.collectionService or game:GetService("CollectionService")
     local LocalPlayer = Players.LocalPlayer
     local loadModule: (any) -> any = context.requireModule or require
+    local function loadNativeModule(module)
+        if context.requireModule ~= nil then
+            return loadModule(module)
+        end
+        local setter = setthreadidentity or setidentity or setthreadcontext
+        local getter = getthreadidentity or getidentity or getthreadcontext
+        if type(setter) ~= "function" then
+            return loadModule(module)
+        end
+        local previousIdentity = 8
+        if type(getter) == "function" then
+            local success, identity = pcall(getter)
+            if success and type(identity) == "number" then
+                previousIdentity = identity
+            end
+        end
+        setter(2)
+        local success, result = pcall(loadModule, module)
+        setter(previousIdentity)
+        if not success then
+            error(result, 0)
+        end
+        return result
+    end
     local controllers = LocalPlayer.PlayerScripts:WaitForChild("Controllers")
     local cameraControllerModule = controllers:WaitForChild("CameraController")
     local duelControllerModule = controllers:WaitForChild("DuelController")
@@ -211,16 +235,17 @@ function Rivals.new(context)
         end
         RunService.Heartbeat:Wait()
     end
-    local CameraController = loadModule(cameraControllerModule)
-    local DuelController = loadModule(duelControllerModule)
-    local FighterController = loadModule(fighterControllerModule)
-    local ControlsController = loadModule(controlsControllerModule)
-    local MechanicsController = loadModule(mechanicsControllerModule)
+    local CameraController = loadNativeModule(cameraControllerModule)
+    local DuelController = loadNativeModule(duelControllerModule)
+    local FighterController = loadNativeModule(fighterControllerModule)
+    local ControlsController = loadNativeModule(controlsControllerModule)
+    local MechanicsController = loadNativeModule(mechanicsControllerModule)
     local PlayerDataController = context.playerDataController
     local CosmeticLibrary = context.cosmeticLibrary
     local Equipment = context.equipment
     local EquipmentStateLibrary = context.equipmentStateLibrary
     local EquipCosmetic = context.equipCosmetic
+    local ClientViewModelLibrary = context.clientViewModelLibrary
     local MatchmakingController
     local ShootingRangeController
     local TaskLibrary
@@ -228,31 +253,42 @@ function Rivals.new(context)
     if context.taskFarmRuntime == nil then
         local ReplicatedStorage = game:GetService("ReplicatedStorage")
         local modules = ReplicatedStorage:WaitForChild("Modules")
-        PlayerDataController = PlayerDataController or loadModule(playerDataControllerModule)
-        CosmeticLibrary = CosmeticLibrary or loadModule(modules:WaitForChild("CosmeticLibrary"))
+        PlayerDataController = PlayerDataController or loadNativeModule(playerDataControllerModule)
+        CosmeticLibrary = CosmeticLibrary
+            or loadNativeModule(modules:WaitForChild("CosmeticLibrary"))
         local equipmentModule = LocalPlayer.PlayerScripts
             :WaitForChild("Modules")
             :WaitForChild("UserInterface")
             :WaitForChild("Equipment")
-        Equipment = Equipment or loadModule(equipmentModule)
+        Equipment = Equipment or loadNativeModule(equipmentModule)
         EquipmentStateLibrary = EquipmentStateLibrary
-            or loadModule(equipmentModule:WaitForChild("EquipmentState"))
+            or loadNativeModule(equipmentModule:WaitForChild("EquipmentState"))
         EquipCosmetic = EquipCosmetic
             or ReplicatedStorage:WaitForChild("Remotes")
                 :WaitForChild("Data")
                 :WaitForChild("EquipCosmetic")
+        ClientViewModelLibrary = ClientViewModelLibrary
+            or loadNativeModule(
+                LocalPlayer.PlayerScripts
+                    :WaitForChild("Modules")
+                    :WaitForChild("ClientReplicatedClasses")
+                    :WaitForChild("ClientFighter")
+                    :WaitForChild("ClientItem")
+                    :WaitForChild("ClientViewModel")
+            )
         MatchmakingController = context.matchmakingController
-            or loadModule(matchmakingControllerModule)
+            or loadNativeModule(matchmakingControllerModule)
         ShootingRangeController = context.shootingRangeController
-            or loadModule(shootingRangeControllerModule)
-        TaskLibrary = context.taskLibrary or loadModule(modules:WaitForChild("TaskLibrary"))
-        RivalsConstants = context.rivalsConstants or loadModule(modules:WaitForChild("CONSTANTS"))
+            or loadNativeModule(shootingRangeControllerModule)
+        TaskLibrary = context.taskLibrary or loadNativeModule(modules:WaitForChild("TaskLibrary"))
+        RivalsConstants = context.rivalsConstants
+            or loadNativeModule(modules:WaitForChild("CONSTANTS"))
     end
     local function isGunGame()
         return ModePolicy.controllerIsGunGame(DuelController, LocalPlayer)
     end
     local PickWeaponsPage = context.pickWeaponsPage
-        or loadModule(
+        or loadNativeModule(
             LocalPlayer.PlayerScripts
                 :WaitForChild("Modules")
                 :WaitForChild("Pages")
@@ -292,12 +328,15 @@ function Rivals.new(context)
         and EquipmentStateLibrary
         and PlayerDataController
         and EquipCosmetic
+        and ClientViewModelLibrary
     then
         skinUnlock = SkinUnlock.new({
+            clientViewModelLibrary = ClientViewModelLibrary,
             cosmeticLibrary = CosmeticLibrary,
             equipmentState = Equipment.EquipmentState,
             equipmentStateLibrary = EquipmentStateLibrary,
             equipCosmetic = EquipCosmetic,
+            fighterController = FighterController,
             onEquippedChanged = function(cosmetics)
                 persistCosmeticSetting("unlockAllCosmeticsEquipped", cosmetics)
             end,
@@ -1621,6 +1660,9 @@ function Rivals.new(context)
             return
         end
         local settings = store:Get().settings
+        if skinUnlock then
+            skinUnlock:step()
+        end
         if redLightSafety then
             local duel = DuelController:GetDuel(LocalPlayer)
             redLightSafety:refresh(duel and duel.ChickenGame)
