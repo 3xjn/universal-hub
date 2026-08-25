@@ -174,30 +174,6 @@ function Rivals.new(context)
     local CollectionService = context.collectionService or game:GetService("CollectionService")
     local LocalPlayer = Players.LocalPlayer
     local loadModule: (any) -> any = context.requireModule or require
-    local function loadNativeModule(module)
-        if context.requireModule ~= nil then
-            return loadModule(module)
-        end
-        local setter = setthreadidentity or setidentity or setthreadcontext
-        local getter = getthreadidentity or getidentity or getthreadcontext
-        if type(setter) ~= "function" then
-            return loadModule(module)
-        end
-        local previousIdentity = 8
-        if type(getter) == "function" then
-            local success, identity = pcall(getter)
-            if success and type(identity) == "number" then
-                previousIdentity = identity
-            end
-        end
-        setter(2)
-        local success, result = pcall(loadModule, module)
-        setter(previousIdentity)
-        if not success then
-            error(result, 0)
-        end
-        return result
-    end
     local controllers = LocalPlayer.PlayerScripts:WaitForChild("Controllers")
     local cameraControllerModule = controllers:WaitForChild("CameraController")
     local duelControllerModule = controllers:WaitForChild("DuelController")
@@ -234,13 +210,78 @@ function Rivals.new(context)
             RunService.Heartbeat:Wait()
         end
         RunService.Heartbeat:Wait()
+
+        local loadedModules = getloadedmodules
+        if type(loadedModules) == "function" then
+            local playerModules = LocalPlayer.PlayerScripts:WaitForChild("Modules")
+            local clientItem = playerModules
+                :WaitForChild("ClientReplicatedClasses")
+                :WaitForChild("ClientFighter")
+                :WaitForChild("ClientItem")
+            local equipment = playerModules:WaitForChild("UserInterface"):WaitForChild("Equipment")
+            local requiredModules = {
+                clientItem:WaitForChild("ClientViewModel"),
+                clientItem.Parent:WaitForChild("FighterInterface"):WaitForChild("Keybinds"),
+                equipment,
+                equipment:WaitForChild("EquipmentState"),
+            }
+            local deadline = os.clock() + 15
+            while true do
+                local loaded = {}
+                for _, module in ipairs(loadedModules()) do
+                    loaded[module] = true
+                end
+                local ready = true
+                for _, module in ipairs(requiredModules) do
+                    if not loaded[module] then
+                        ready = false
+                        break
+                    end
+                end
+                if ready then
+                    break
+                end
+                if os.clock() >= deadline then
+                    error("RIVALS native module bootstrap timed out", 0)
+                end
+                RunService.Heartbeat:Wait()
+            end
+        end
     end
-    local CameraController = loadNativeModule(cameraControllerModule)
-    local DuelController = loadNativeModule(duelControllerModule)
-    local FighterController = loadNativeModule(fighterControllerModule)
-    local ControlsController = loadNativeModule(controlsControllerModule)
-    local MechanicsController = loadNativeModule(mechanicsControllerModule)
     local PlayerDataController = context.playerDataController
+    if context.taskFarmRuntime == nil then
+        local modules = game:GetService("ReplicatedStorage"):WaitForChild("Modules")
+        PlayerDataController = PlayerDataController or loadModule(playerDataControllerModule)
+        if context.requireModule == nil then
+            local playerDataUtility = loadModule(modules:WaitForChild("PlayerDataUtility"))
+            for _, name in ipairs({
+                "GetSetting",
+                "GetSettingChangedSignal",
+                "SetSetting",
+                "IsNosniyGamesTeamMember",
+                "GetWeaponData",
+                "HasGamepass",
+                "GetStatistic",
+                "GetDirectoryStatistic",
+                "GetWeaponStatistic",
+                "GetMapStatistic",
+                "GetUnlockedWeapons",
+                "AreTasksCompleted",
+            }) do
+                local method = playerDataUtility[name]
+                if type(method) == "function" then
+                    PlayerDataController[name] = function(controller, ...)
+                        return method(playerDataUtility, controller, ...)
+                    end
+                end
+            end
+        end
+    end
+    local CameraController = loadModule(cameraControllerModule)
+    local DuelController = loadModule(duelControllerModule)
+    local FighterController = loadModule(fighterControllerModule)
+    local ControlsController = loadModule(controlsControllerModule)
+    local MechanicsController = loadModule(mechanicsControllerModule)
     local CosmeticLibrary = context.cosmeticLibrary
     local Equipment = context.equipment
     local EquipmentStateLibrary = context.equipmentStateLibrary
@@ -253,22 +294,33 @@ function Rivals.new(context)
     if context.taskFarmRuntime == nil then
         local ReplicatedStorage = game:GetService("ReplicatedStorage")
         local modules = ReplicatedStorage:WaitForChild("Modules")
-        PlayerDataController = PlayerDataController or loadNativeModule(playerDataControllerModule)
-        CosmeticLibrary = CosmeticLibrary
-            or loadNativeModule(modules:WaitForChild("CosmeticLibrary"))
+        CosmeticLibrary = CosmeticLibrary or loadModule(modules:WaitForChild("CosmeticLibrary"))
         local equipmentModule = LocalPlayer.PlayerScripts
             :WaitForChild("Modules")
             :WaitForChild("UserInterface")
             :WaitForChild("Equipment")
-        Equipment = Equipment or loadNativeModule(equipmentModule)
+        Equipment = Equipment or loadModule(equipmentModule)
         EquipmentStateLibrary = EquipmentStateLibrary
-            or loadNativeModule(equipmentModule:WaitForChild("EquipmentState"))
+            or loadModule(equipmentModule:WaitForChild("EquipmentState"))
         EquipCosmetic = EquipCosmetic
             or ReplicatedStorage:WaitForChild("Remotes")
                 :WaitForChild("Data")
                 :WaitForChild("EquipCosmetic")
+        if context.requireModule == nil then
+            local wrapController = loadModule(controllers:WaitForChild("WrapController"))
+            local wrapGroups =
+                LocalPlayer.PlayerScripts:WaitForChild("Modules"):WaitForChild("WrapGroupObjects")
+            for _, module in ipairs(wrapGroups:GetChildren()) do
+                if
+                    module:IsA("ModuleScript")
+                    and wrapController._wrap_group_classes[module.Name] == nil
+                then
+                    wrapController._wrap_group_classes[module.Name] = loadModule(module)
+                end
+            end
+        end
         ClientViewModelLibrary = ClientViewModelLibrary
-            or loadNativeModule(
+            or loadModule(
                 LocalPlayer.PlayerScripts
                     :WaitForChild("Modules")
                     :WaitForChild("ClientReplicatedClasses")
@@ -277,18 +329,17 @@ function Rivals.new(context)
                     :WaitForChild("ClientViewModel")
             )
         MatchmakingController = context.matchmakingController
-            or loadNativeModule(matchmakingControllerModule)
+            or loadModule(matchmakingControllerModule)
         ShootingRangeController = context.shootingRangeController
-            or loadNativeModule(shootingRangeControllerModule)
-        TaskLibrary = context.taskLibrary or loadNativeModule(modules:WaitForChild("TaskLibrary"))
-        RivalsConstants = context.rivalsConstants
-            or loadNativeModule(modules:WaitForChild("CONSTANTS"))
+            or loadModule(shootingRangeControllerModule)
+        TaskLibrary = context.taskLibrary or loadModule(modules:WaitForChild("TaskLibrary"))
+        RivalsConstants = context.rivalsConstants or loadModule(modules:WaitForChild("CONSTANTS"))
     end
     local function isGunGame()
         return ModePolicy.controllerIsGunGame(DuelController, LocalPlayer)
     end
     local PickWeaponsPage = context.pickWeaponsPage
-        or loadNativeModule(
+        or loadModule(
             LocalPlayer.PlayerScripts
                 :WaitForChild("Modules")
                 :WaitForChild("Pages")
