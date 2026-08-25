@@ -188,7 +188,7 @@ function Rivals.new(context)
         matchmakingControllerModule = controllers:WaitForChild("MatchmakingController")
         shootingRangeControllerModule = controllers:WaitForChild("ShootingRangeController")
     end
-    if context.requireModule == nil then
+    if context.requireModule == nil and context.taskFarmRuntime == nil then
         if not game:IsLoaded() then
             game.Loaded:Wait()
         end
@@ -219,11 +219,27 @@ function Rivals.new(context)
                 :WaitForChild("ClientFighter")
                 :WaitForChild("ClientItem")
             local equipment = playerModules:WaitForChild("UserInterface"):WaitForChild("Equipment")
+            local replicatedModules = game:GetService("ReplicatedStorage"):WaitForChild("Modules")
+            local lightingProfiles = playerModules:WaitForChild("LightingProfiles")
             local requiredModules = {
+                cameraControllerModule,
+                duelControllerModule,
+                fighterControllerModule,
+                controlsControllerModule,
+                mechanicsControllerModule,
+                playerDataControllerModule,
+                matchmakingControllerModule,
+                shootingRangeControllerModule,
+                controllers:WaitForChild("EmoteController"),
+                controllers:WaitForChild("WrapController"),
+                replicatedModules:WaitForChild("CosmeticLibrary"),
+                replicatedModules:WaitForChild("TaskLibrary"),
+                replicatedModules:WaitForChild("CONSTANTS"),
                 clientItem:WaitForChild("ClientViewModel"),
                 clientItem.Parent:WaitForChild("FighterInterface"):WaitForChild("Keybinds"),
                 equipment,
                 equipment:WaitForChild("EquipmentState"),
+                lightingProfiles:WaitForChild("Default"),
             }
             local deadline = os.clock() + 15
             while true do
@@ -250,30 +266,84 @@ function Rivals.new(context)
     end
     local PlayerDataController = context.playerDataController
     if context.taskFarmRuntime == nil then
-        local modules = game:GetService("ReplicatedStorage"):WaitForChild("Modules")
         PlayerDataController = PlayerDataController or loadModule(playerDataControllerModule)
         if context.requireModule == nil then
-            local playerDataUtility = loadModule(modules:WaitForChild("PlayerDataUtility"))
-            for _, name in ipairs({
-                "GetSetting",
-                "GetSettingChangedSignal",
-                "SetSetting",
-                "IsNosniyGamesTeamMember",
-                "GetWeaponData",
-                "HasGamepass",
-                "GetStatistic",
-                "GetDirectoryStatistic",
-                "GetWeaponStatistic",
-                "GetMapStatistic",
-                "GetUnlockedWeapons",
-                "AreTasksCompleted",
-            }) do
-                local method = playerDataUtility[name]
-                if type(method) == "function" then
-                    PlayerDataController[name] = function(controller, ...)
-                        return method(playerDataUtility, controller, ...)
+            PlayerDataController.GetSetting = function(controller, name, profile)
+                local settings = controller:Get("Settings")
+                return settings[profile or controller:Get("SettingsProfile")][name]
+            end
+            PlayerDataController.GetSettingChangedSignal = function(controller, name)
+                local events = controller._setting_changed_events
+                return (events and events[name]) or controller:GetDataChangedSignal("Settings")
+            end
+            PlayerDataController.SetSetting = function(controller, name, value, profile)
+                local settings = controller:Get("Settings")
+                settings[profile or controller:Get("SettingsProfile")][name] = value
+                local events = controller._setting_changed_events
+                if events and events[name] then
+                    events[name]:Fire(value, name)
+                end
+            end
+            PlayerDataController.IsNosniyGamesTeamMember = function(controller)
+                local rank = controller:Get("GroupRank")
+                return type(rank) == "number" and rank >= 100
+            end
+            PlayerDataController.GetWeaponData = function(controller, weaponName)
+                for index, weaponData in pairs(controller:Get("WeaponInventory")) do
+                    if weaponData.Name == weaponName then
+                        return weaponData, index
                     end
                 end
+                return nil
+            end
+            PlayerDataController.HasGamepass = function(controller, name)
+                return controller:Get("Gamepasses")[name]
+            end
+            PlayerDataController.GetStatistic = function(controller, name)
+                return controller:Get(name) or 0
+            end
+            PlayerDataController.GetDirectoryStatistic = function(
+                controller,
+                directory,
+                itemName,
+                statistic,
+                aliases
+            )
+                local item = controller:Get(directory)[itemName] or {}
+                local value = item[statistic] or 0
+                if type(value) ~= "number" then
+                    return value
+                end
+                for _, alias in pairs(aliases or {}) do
+                    value += item[alias] or 0
+                end
+                return value
+            end
+            PlayerDataController.GetWeaponStatistic = function(controller, ...)
+                return controller:GetDirectoryStatistic("WeaponStatistics", ...)
+            end
+            PlayerDataController.GetMapStatistic = function(controller, ...)
+                return controller:GetDirectoryStatistic("MapStatistics", ...)
+            end
+            PlayerDataController.GetUnlockedWeapons = function(controller, excludeFree)
+                local unlocked = {}
+                for _, weaponData in pairs(controller:Get("WeaponInventory")) do
+                    unlocked[weaponData.Name] = true
+                end
+                if not excludeFree then
+                    for weaponName in pairs(controller:Get("FreeWeaponUnlockCheck")) do
+                        unlocked[weaponName] = true
+                    end
+                end
+                return unlocked
+            end
+            PlayerDataController.AreTasksCompleted = function(controller, directory)
+                for _, taskData in pairs(controller:Get(directory or "Tasks")) do
+                    if not taskData.Completed then
+                        return false
+                    end
+                end
+                return true
             end
         end
     end
