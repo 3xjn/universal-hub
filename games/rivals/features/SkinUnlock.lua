@@ -9,6 +9,13 @@ for _, cosmeticType in ipairs(COSMETIC_TYPES) do
     SUPPORTED_TYPES[cosmeticType] = true
 end
 
+local function booleanField(value, key)
+    if type(value) == "table" and type(value[key]) == "boolean" then
+        return value[key]
+    end
+    return nil
+end
+
 local function copyEntry(value)
     if type(value) == "string" then
         return { name = value }
@@ -18,7 +25,8 @@ local function copyEntry(value)
     end
     return {
         name = value.name,
-        inverted = type(value.inverted) == "boolean" and value.inverted or nil,
+        inverted = booleanField(value, "inverted"),
+        onlyUseFavorites = booleanField(value, "onlyUseFavorites"),
     }
 end
 
@@ -47,7 +55,13 @@ local function copyCosmetics(source)
                 result,
                 value.weapon,
                 value.cosmeticType or (value.skin and "Skin"),
-                value.name and { name = value.name, inverted = value.inverted } or value.skin
+                value.name
+                        and {
+                            name = value.name,
+                            inverted = value.inverted,
+                            onlyUseFavorites = value.onlyUseFavorites,
+                        }
+                    or value.skin
             )
         end
     end
@@ -66,6 +80,9 @@ function SkinUnlock.encodeRestore(restore)
             if type(entry.inverted) == "boolean" then
                 encoded.inverted = entry.inverted
             end
+            if type(entry.onlyUseFavorites) == "boolean" then
+                encoded.onlyUseFavorites = entry.onlyUseFavorites
+            end
             table.insert(result, encoded)
         end
     end
@@ -78,9 +95,12 @@ end
 
 local function sameEntry(value, entry)
     local name = type(value) == "table" and value.Name or NONE_COSMETIC
-    local inverted = type(value) == "table" and value.Inverted == true
     return name == entry.name
-        and (entry.name == NONE_COSMETIC or entry.inverted == nil or inverted == entry.inverted)
+        and (entry.inverted == nil or booleanField(value, "Inverted") == entry.inverted)
+        and (
+            entry.onlyUseFavorites == nil
+            or booleanField(value, "OnlyUseFavorites") == entry.onlyUseFavorites
+        )
 end
 
 local function applyEntry(weaponData, cosmeticType, entry)
@@ -92,6 +112,9 @@ local function applyEntry(weaponData, cosmeticType, entry)
     if cosmeticType == "Wrap" and type(entry.inverted) == "boolean" then
         weaponData[cosmeticType].Inverted = entry.inverted
     end
+    if type(entry.onlyUseFavorites) == "boolean" then
+        weaponData[cosmeticType].OnlyUseFavorites = entry.onlyUseFavorites
+    end
 end
 
 function SkinUnlock.new(options)
@@ -101,6 +124,7 @@ function SkinUnlock.new(options)
     assert(options.equipCosmetic and type(options.equipCosmetic.FireServer) == "function")
     assert(type(options.equipmentStateLibrary) == "table")
     assert(type(options.equipmentStateLibrary.SelectCosmetic) == "function")
+    assert(type(options.equipmentStateLibrary.SetCosmeticInvertedState) == "function")
     assert(type(options.equipmentState) == "table")
 
     local self = setmetatable({
@@ -115,6 +139,7 @@ function SkinUnlock.new(options)
         onRestoreChanged = options.onRestoreChanged or function() end,
         originalOwnsCosmetic = options.cosmeticLibrary.OwnsCosmetic,
         originalSelectCosmetic = options.equipmentStateLibrary.SelectCosmetic,
+        originalSetCosmeticInvertedState = options.equipmentStateLibrary.SetCosmeticInvertedState,
         playerDataController = options.playerDataController,
         restore = {},
     }, SkinUnlock)
@@ -130,6 +155,13 @@ function SkinUnlock.new(options)
         local result = self.originalSelectCosmetic(state, cosmetic)
         if self.enabled and state == self.equipmentState then
             self:_selectLocalCosmetic(state, cosmetic)
+        end
+        return result
+    end
+    self.setCosmeticInvertedState = function(state, inverted)
+        local result = self.originalSetCosmeticInvertedState(state, inverted)
+        if self.enabled and state == self.equipmentState then
+            self:_setLocalWrapInverted(state, inverted)
         end
         return result
     end
@@ -190,12 +222,13 @@ function SkinUnlock:_snapshotOwnedCosmetics()
             for _, cosmeticType in ipairs(COSMETIC_TYPES) do
                 local value = weapon[cosmeticType]
                 local name = type(value) == "table" and value.Name or nil
+                local canRestore = name == RANDOM_COSMETIC
+                    or type(name) == "string"
+                        and self:_nativeOwns(cosmeticInventory, name, weapon.Name)
                 restore[weapon.Name][cosmeticType] = {
-                    name = type(name) == "string"
-                            and self:_nativeOwns(cosmeticInventory, name, weapon.Name)
-                            and name
-                        or NONE_COSMETIC,
-                    inverted = type(value) == "table" and value.Inverted == true or nil,
+                    name = canRestore and name or NONE_COSMETIC,
+                    inverted = booleanField(value, "Inverted"),
+                    onlyUseFavorites = booleanField(value, "OnlyUseFavorites"),
                 }
             end
         end
@@ -240,15 +273,55 @@ function SkinUnlock:_selectLocalCosmetic(state, cosmetic)
         end
     end
 
+    local weaponData = self:_getWeaponData(weaponName)
+    local current = weaponData and weaponData[cosmeticType] or nil
+    local inverted
+    local onlyUseFavorites
+    if cosmeticType == "Wrap" then
+        inverted = booleanField(state, "CosmeticInverted")
+    end
+    if cosmetic == RANDOM_COSMETIC then
+        onlyUseFavorites = booleanField(current, "OnlyUseFavorites")
+    end
     local entry = {
         name = cosmetic,
-        inverted = cosmeticType == "Wrap"
-                and type(state.CosmeticInverted) == "boolean"
-                and state.CosmeticInverted
-            or nil,
+        inverted = inverted,
+        onlyUseFavorites = onlyUseFavorites,
     }
     self.equipped[weaponName] = self.equipped[weaponName] or {}
     self.equipped[weaponName][cosmeticType] = entry
+    self:_applyLocalCosmetics()
+    self.onEquippedChanged(copyCosmetics(self.equipped))
+end
+
+function SkinUnlock:_setLocalWrapInverted(state, inverted)
+    local weaponName = state.SelectedWeapon
+    if
+        type(weaponName) ~= "string"
+        or state.CustomizingType ~= "Wrap"
+        or type(inverted) ~= "boolean"
+    then
+        return
+    end
+    local weaponCosmetics = self.equipped[weaponName]
+    local entry = weaponCosmetics and weaponCosmetics.Wrap or nil
+    if not entry then
+        local weaponData = self:_getWeaponData(weaponName)
+        local current = weaponData and weaponData.Wrap or nil
+        if type(current) ~= "table" or type(current.Name) ~= "string" then
+            return
+        end
+        self.equipped[weaponName] = weaponCosmetics or {}
+        entry = {
+            name = current.Name,
+            onlyUseFavorites = booleanField(current, "OnlyUseFavorites"),
+        }
+        self.equipped[weaponName].Wrap = entry
+    end
+    if entry.name == NONE_COSMETIC then
+        return
+    end
+    entry.inverted = inverted
     self:_applyLocalCosmetics()
     self.onEquippedChanged(copyCosmetics(self.equipped))
 end
@@ -263,6 +336,7 @@ function SkinUnlock:_restoreCosmetics(restore)
                 if entry then
                     if
                         entry.name ~= NONE_COSMETIC
+                        and entry.name ~= RANDOM_COSMETIC
                         and not self:_nativeOwns(cosmeticInventory, entry.name, weaponName)
                     then
                         entry = { name = NONE_COSMETIC }
@@ -274,7 +348,10 @@ function SkinUnlock:_restoreCosmetics(restore)
                             weaponName,
                             cosmeticType,
                             entry.name,
-                            { IsInverted = entry.inverted }
+                            {
+                                IsInverted = entry.inverted,
+                                OnlyUseFavorites = entry.onlyUseFavorites,
+                            }
                         )
                         applyEntry(weaponData, cosmeticType, entry)
                     end
@@ -291,6 +368,9 @@ function SkinUnlock:_restoreNativeMethods()
     end
     if self.equipmentStateLibrary.SelectCosmetic == self.selectCosmetic then
         self.equipmentStateLibrary.SelectCosmetic = self.originalSelectCosmetic
+    end
+    if self.equipmentStateLibrary.SetCosmeticInvertedState == self.setCosmeticInvertedState then
+        self.equipmentStateLibrary.SetCosmeticInvertedState = self.originalSetCosmeticInvertedState
     end
 end
 
@@ -319,6 +399,7 @@ function SkinUnlock:update(settings)
         self.onRestoreChanged(copyCosmetics(self.restore))
         self.cosmeticLibrary.OwnsCosmetic = self.unlockOwnsCosmetic
         self.equipmentStateLibrary.SelectCosmetic = self.selectCosmetic
+        self.equipmentStateLibrary.SetCosmeticInvertedState = self.setCosmeticInvertedState
         self:_applyLocalCosmetics()
     else
         local shouldRestore = self.enabled == true

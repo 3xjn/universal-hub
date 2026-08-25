@@ -4,6 +4,7 @@ local SkinUnlock = require("../games/rivals/features/SkinUnlock")
 local Store = require("../modules/Store")
 
 local NONE = "NONE_COSMETIC"
+local RANDOM = "RANDOM_COSMETIC"
 
 local function findEntry(encoded, weapon, cosmeticType)
     for _, entry in ipairs(encoded or {}) do
@@ -45,7 +46,7 @@ local weaponInventory = {
         Wrap = { Name = "Owned Wrap" },
     },
     { Name = "Handgun", Skin = { Name = "Unowned Skin" } },
-    { Name = "Bow" },
+    { Name = "Bow", Skin = { Name = RANDOM, OnlyUseFavorites = true } },
 }
 local refreshes = {}
 local weaponInventoryListeners = {}
@@ -104,7 +105,11 @@ local equipmentStateLibrary = {}
 function equipmentStateLibrary.SelectCosmetic(state, cosmetic)
     state.SelectedCosmetic = cosmetic ~= NONE and cosmetic or nil
 end
+function equipmentStateLibrary.SetCosmeticInvertedState(state, inverted)
+    state.CosmeticInverted = inverted
+end
 local originalSelectCosmetic = equipmentStateLibrary.SelectCosmetic
+local originalSetCosmeticInvertedState = equipmentStateLibrary.SetCosmeticInvertedState
 
 local equips = {}
 local equipCosmetic = {}
@@ -147,6 +152,8 @@ assert(findEntry(saved, "Assault Rifle", "Wrap").name == "Owned Wrap")
 assert(findEntry(saved, "Assault Rifle", "Charm").name == NONE)
 assert(findEntry(saved, "Assault Rifle", "Finisher").name == NONE)
 assert(findEntry(saved, "Handgun", "Skin").name == NONE)
+assert(findEntry(saved, "Bow", "Skin").name == RANDOM)
+assert(findEntry(saved, "Bow", "Skin").onlyUseFavorites == true)
 assert(cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Visible Skin", "Assault Rifle"))
 assert(cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Visible Wrap", "Assault Rifle"))
 assert(cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Visible Charm", "Assault Rifle"))
@@ -155,6 +162,7 @@ assert(not cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Hidden Skin", "Assau
 assert(not cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Hidden Wrap", "Assault Rifle"))
 assert(not cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Emote", "Assault Rifle"))
 assert(equipmentStateLibrary.SelectCosmetic ~= originalSelectCosmetic)
+assert(equipmentStateLibrary.SetCosmeticInvertedState ~= originalSetCosmeticInvertedState)
 
 for cosmeticType, name in pairs({
     Skin = "Visible Skin",
@@ -163,11 +171,19 @@ for cosmeticType, name in pairs({
     Finisher = "Visible Finisher",
 }) do
     equipmentState.CustomizingType = cosmeticType
-    equipmentState.CosmeticInverted = cosmeticType == "Wrap" and true or nil
+    equipmentState.CosmeticInverted = nil
     equipmentStateLibrary.SelectCosmetic(equipmentState, name)
+    if cosmeticType == "Wrap" then
+        equipmentStateLibrary.SetCosmeticInvertedState(equipmentState, true)
+    end
     assert(weaponInventory[1][cosmeticType].Name == name)
 end
 assert(weaponInventory[1].Wrap.Inverted == true)
+equipmentState.CustomizingType = "Wrap"
+equipmentStateLibrary.SetCosmeticInvertedState(equipmentState, false)
+assert(weaponInventory[1].Wrap.Inverted == false)
+assert(findEntry(equippedWrites[#equippedWrites], "Assault Rifle", "Wrap").inverted == false)
+equipmentStateLibrary.SetCosmeticInvertedState(equipmentState, true)
 local locallyEquipped = equippedWrites[#equippedWrites]
 assert(findEntry(locallyEquipped, "Assault Rifle", "Skin").name == "Visible Skin")
 assert(findEntry(locallyEquipped, "Assault Rifle", "Wrap").inverted == true)
@@ -180,6 +196,7 @@ assert(
     weaponInventory[1].Skin.Name == "Visible Skin",
     "server inventory refreshes must reapply the persisted local selection"
 )
+weaponInventory[3].Skin = { Name = "Visible Skin" }
 
 unlock:update({
     unlockAllSkins = false,
@@ -188,20 +205,27 @@ unlock:update({
 })
 assert(cosmeticLibrary.OwnsCosmetic == originalOwnsCosmetic)
 assert(equipmentStateLibrary.SelectCosmetic == originalSelectCosmetic)
+assert(equipmentStateLibrary.SetCosmeticInvertedState == originalSetCosmeticInvertedState)
 assert(weaponInventory[1].Skin.Name == "Owned Skin")
 assert(weaponInventory[1].Wrap.Name == "Owned Wrap")
 assert(weaponInventory[1].Charm == nil and weaponInventory[1].Finisher == nil)
 assert(weaponInventory[2].Skin == nil, "legacy unowned equipment must safely restore to none")
+assert(weaponInventory[3].Skin.Name == RANDOM)
+assert(weaponInventory[3].Skin.OnlyUseFavorites == true)
 assert(next(restoreWrites[#restoreWrites]) == nil)
 assert(next(equippedWrites[#equippedWrites]) == nil)
 local restoredTypes = {}
+local randomRestore
 for _, call in ipairs(equips) do
     if call.weapon == "Assault Rifle" then
         restoredTypes[call.cosmeticType] = call.name
+    elseif call.weapon == "Bow" and call.cosmeticType == "Skin" then
+        randomRestore = call
     end
 end
 assert(restoredTypes.Skin == "Owned Skin" and restoredTypes.Wrap == "Owned Wrap")
 assert(restoredTypes.Charm == NONE and restoredTypes.Finisher == NONE)
+assert(randomRestore.name == RANDOM and randomRestore.options.OnlyUseFavorites == true)
 
 local localReload = runtime()
 localReload:update({
@@ -214,6 +238,7 @@ assert(weaponInventory[1].Wrap.Name == "Visible Wrap")
 local writesBeforeStop = #equippedWrites
 localReload:stop()
 assert(equipmentStateLibrary.SelectCosmetic == originalSelectCosmetic)
+assert(equipmentStateLibrary.SetCosmeticInvertedState == originalSetCosmeticInvertedState)
 assert(weaponInventory[1].Skin.Name == "Visible Skin", "hot reload must preserve local equipment")
 assert(#equippedWrites == writesBeforeStop, "hot reload must preserve local config")
 weaponInventory[1].Skin = { Name = "Owned Skin" }
