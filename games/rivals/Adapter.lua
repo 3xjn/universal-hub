@@ -10,6 +10,7 @@ local AutoDeflect = require("./features/AutoDeflect")
 local AutoCounter = require("./features/AutoCounter")
 local NoScope = require("./features/NoScope")
 local Pickup = require("./features/Pickup")
+local SkinUnlock = require("./features/SkinUnlock")
 local RedLightSafety = require("./features/RedLightSafety")
 local TaskLoadout = require("./tasks/TaskLoadout")
 local HookRuntime = require("./libraries/HookRuntime")
@@ -215,7 +216,9 @@ function Rivals.new(context)
     local FighterController = loadModule(fighterControllerModule)
     local ControlsController = loadModule(controlsControllerModule)
     local MechanicsController = loadModule(mechanicsControllerModule)
-    local PlayerDataController
+    local PlayerDataController = context.playerDataController
+    local CosmeticLibrary = context.cosmeticLibrary
+    local EquipCosmetic = context.equipCosmetic
     local MatchmakingController
     local ShootingRangeController
     local TaskLibrary
@@ -223,8 +226,12 @@ function Rivals.new(context)
     if context.taskFarmRuntime == nil then
         local ReplicatedStorage = game:GetService("ReplicatedStorage")
         local modules = ReplicatedStorage:WaitForChild("Modules")
-        PlayerDataController = context.playerDataController
-            or loadModule(playerDataControllerModule)
+        PlayerDataController = PlayerDataController or loadModule(playerDataControllerModule)
+        CosmeticLibrary = CosmeticLibrary or loadModule(modules:WaitForChild("CosmeticLibrary"))
+        EquipCosmetic = EquipCosmetic
+            or ReplicatedStorage:WaitForChild("Remotes")
+                :WaitForChild("Data")
+                :WaitForChild("EquipCosmetic")
         MatchmakingController = context.matchmakingController
             or loadModule(matchmakingControllerModule)
         ShootingRangeController = context.shootingRangeController
@@ -259,6 +266,23 @@ function Rivals.new(context)
         end
     end
     local lastTaskPauseSetting = store:Get().settings.taskAutomationPaused == true
+    local skinUnlock
+    if CosmeticLibrary and PlayerDataController and EquipCosmetic then
+        skinUnlock = SkinUnlock.new({
+            cosmeticLibrary = CosmeticLibrary,
+            equipCosmetic = EquipCosmetic,
+            onRestoreChanged = function(snapshot)
+                local state = store:Get()
+                local updated = table.clone(state.settings)
+                updated.unlockAllSkinsRestore = SkinUnlock.encodeRestore(snapshot)
+                store:Patch({ settings = updated })
+                if type(context.settingsChanged) == "function" then
+                    context.settingsChanged(updated)
+                end
+            end,
+            playerDataController = PlayerDataController,
+        })
+    end
     local session = Session.new()
     local stopped = false
     local trigger = {
@@ -2168,6 +2192,9 @@ function Rivals.new(context)
                 taskFarmRuntime:resume()
             end
         end
+        if skinUnlock then
+            skinUnlock:update(settings)
+        end
         effects:update(settings)
         refreshHooks()
         if settings.autoCounter ~= true then
@@ -2227,6 +2254,9 @@ function Rivals.new(context)
         stopped = true
         if redLightSafety then
             redLightSafety:stop()
+        end
+        if skinUnlock then
+            skinUnlock:stop()
         end
         if taskEmergencyConnection then
             taskEmergencyConnection:Disconnect()

@@ -222,6 +222,8 @@ for _, path in ipairs(Catalog) do
             expected.teleportBehind = false
             expected.skipDeflect = false
             expected.autoDeflect = false
+            expected.unlockAllSkins = false
+            expected.unlockAllSkinsRestore = {}
             expected.triggerDelay = 0
             expectedState = Compatibility.InitialState()
         end
@@ -280,7 +282,7 @@ for _, id in ipairs({ "counterblox", "rivals", "town" }) do
         for _ in pairs(rawDefinitions[id].defaults) do
             count += 1
         end
-        defaultsAreSparse = count == 10
+        defaultsAreSparse = count == 12
             and rawDefinitions[id].defaults.autoCounter == false
             and rawDefinitions[id].defaults.redLightSafety == false
             and rawDefinitions[id].defaults.taskAutomationPaused == true
@@ -290,6 +292,9 @@ for _, id in ipairs({ "counterblox", "rivals", "town" }) do
             and rawDefinitions[id].defaults.teleportBehind == false
             and rawDefinitions[id].defaults.skipDeflect == false
             and rawDefinitions[id].defaults.autoDeflect == false
+            and rawDefinitions[id].defaults.unlockAllSkins == false
+            and type(rawDefinitions[id].defaults.unlockAllSkinsRestore) == "table"
+            and next(rawDefinitions[id].defaults.unlockAllSkinsRestore) == nil
             and rawDefinitions[id].defaults.triggerDelay == 0
         initialStateIsSparse = next(rawDefinitions[id].initialState) == nil
     end

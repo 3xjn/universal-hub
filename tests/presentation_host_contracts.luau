@@ -111,6 +111,7 @@ assertSequence(
         "option:movement:1:bhop:Bunny Hop",
         "option:movement:2:infiniteJump:Infinite Jump",
         "option:movement:3:wallNoclip:Wall Noclip",
+        "option:movement:4:redLightSafety:Red Light Safety",
         "section:Settings:taskFarming:TASK FARMING:70",
         "option:taskFarming:1:taskAutomationPaused:Pause Task Farming",
         "section:Tools:world:WORLD:70",
@@ -127,7 +128,8 @@ assertSequence(
         "option:visuals:21:showTeammates:Allies:audience",
         "option:visuals:4:noFlash:No Flash",
         "option:visuals:5:noSmoke:No Smoke",
-        "option:visuals:6:utilityEsp:Utility ESP",
+        "option:visuals:6:unlockAllSkins:Unlock All Skins",
+        "option:visuals:7:utilityEsp:Utility ESP",
         "cosmetics",
     },
     "RIVALS presentation"
