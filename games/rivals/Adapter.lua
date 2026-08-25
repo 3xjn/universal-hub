@@ -218,6 +218,8 @@ function Rivals.new(context)
     local MechanicsController = loadModule(mechanicsControllerModule)
     local PlayerDataController = context.playerDataController
     local CosmeticLibrary = context.cosmeticLibrary
+    local Equipment = context.equipment
+    local EquipmentStateLibrary = context.equipmentStateLibrary
     local EquipCosmetic = context.equipCosmetic
     local MatchmakingController
     local ShootingRangeController
@@ -228,6 +230,13 @@ function Rivals.new(context)
         local modules = ReplicatedStorage:WaitForChild("Modules")
         PlayerDataController = PlayerDataController or loadModule(playerDataControllerModule)
         CosmeticLibrary = CosmeticLibrary or loadModule(modules:WaitForChild("CosmeticLibrary"))
+        local equipmentModule = LocalPlayer.PlayerScripts
+            :WaitForChild("Modules")
+            :WaitForChild("UserInterface")
+            :WaitForChild("Equipment")
+        Equipment = Equipment or loadModule(equipmentModule)
+        EquipmentStateLibrary = EquipmentStateLibrary
+            or loadModule(equipmentModule:WaitForChild("EquipmentState"))
         EquipCosmetic = EquipCosmetic
             or ReplicatedStorage:WaitForChild("Remotes")
                 :WaitForChild("Data")
@@ -266,19 +275,34 @@ function Rivals.new(context)
         end
     end
     local lastTaskPauseSetting = store:Get().settings.taskAutomationPaused == true
+    local function persistCosmeticSetting(name, cosmetics)
+        local state = store:Get()
+        local updated = table.clone(state.settings)
+        updated[name] = SkinUnlock.encodeRestore(cosmetics)
+        store:Patch({ settings = updated })
+        if type(context.settingsChanged) == "function" then
+            context.settingsChanged(updated)
+        end
+    end
     local skinUnlock
-    if CosmeticLibrary and PlayerDataController and EquipCosmetic then
+    if
+        CosmeticLibrary
+        and type(Equipment) == "table"
+        and type(Equipment.EquipmentState) == "table"
+        and EquipmentStateLibrary
+        and PlayerDataController
+        and EquipCosmetic
+    then
         skinUnlock = SkinUnlock.new({
             cosmeticLibrary = CosmeticLibrary,
+            equipmentState = Equipment.EquipmentState,
+            equipmentStateLibrary = EquipmentStateLibrary,
             equipCosmetic = EquipCosmetic,
-            onRestoreChanged = function(snapshot)
-                local state = store:Get()
-                local updated = table.clone(state.settings)
-                updated.unlockAllSkinsRestore = SkinUnlock.encodeRestore(snapshot)
-                store:Patch({ settings = updated })
-                if type(context.settingsChanged) == "function" then
-                    context.settingsChanged(updated)
-                end
+            onEquippedChanged = function(cosmetics)
+                persistCosmeticSetting("unlockAllCosmeticsEquipped", cosmetics)
+            end,
+            onRestoreChanged = function(cosmetics)
+                persistCosmeticSetting("unlockAllSkinsRestore", cosmetics)
             end,
             playerDataController = PlayerDataController,
         })

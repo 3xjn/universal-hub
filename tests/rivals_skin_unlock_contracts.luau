@@ -5,12 +5,13 @@ local Store = require("../modules/Store")
 
 local NONE = "NONE_COSMETIC"
 
-local function copyMap(source)
-    local result = {}
-    for key, value in pairs(source or {}) do
-        result[key] = value
+local function findEntry(encoded, weapon, cosmeticType)
+    for _, entry in ipairs(encoded or {}) do
+        if entry.weapon == weapon and entry.cosmeticType == cosmeticType then
+            return entry
+        end
     end
-    return result
+    return nil
 end
 
 local cosmeticLibrary = {
@@ -19,7 +20,12 @@ local cosmeticLibrary = {
         ["Visible Skin"] = { Type = "Skin", ItemName = "Assault Rifle" },
         ["Unowned Skin"] = { Type = "Skin", ItemName = "Handgun" },
         ["Hidden Skin"] = { Type = "Skin", ItemName = "Assault Rifle", Hidden = true },
-        Wrap = { Type = "Wrap" },
+        ["Owned Wrap"] = { Type = "Wrap" },
+        ["Visible Wrap"] = { Type = "Wrap" },
+        ["Hidden Wrap"] = { Type = "Wrap", Hidden = true },
+        ["Visible Charm"] = { Type = "Charm" },
+        ["Visible Finisher"] = { Type = "Finisher" },
+        Emote = { Type = "Emote" },
     },
 }
 function cosmeticLibrary.OwnsCosmetic(_, inventory, name, weapon)
@@ -30,18 +36,40 @@ local originalOwnsCosmetic = cosmeticLibrary.OwnsCosmetic
 
 local cosmeticInventory = {
     ["Owned Skin"] = { ["Assault Rifle"] = true },
+    ["Owned Wrap"] = { ["Assault Rifle"] = true },
 }
 local weaponInventory = {
-    { Name = "Assault Rifle", Skin = { Name = "Owned Skin" } },
+    {
+        Name = "Assault Rifle",
+        Skin = { Name = "Owned Skin" },
+        Wrap = { Name = "Owned Wrap" },
+    },
     { Name = "Handgun", Skin = { Name = "Unowned Skin" } },
     { Name = "Bow" },
 }
-local refreshes = 0
+local refreshes = {}
+local weaponInventoryListeners = {}
+local weaponInventorySignal = {}
+function weaponInventorySignal:Connect(listener)
+    weaponInventoryListeners[listener] = true
+    return {
+        Disconnect = function()
+            weaponInventoryListeners[listener] = nil
+        end,
+    }
+end
+function weaponInventorySignal:Fire()
+    for listener in pairs(weaponInventoryListeners) do
+        listener()
+    end
+end
 local playerDataController = {
     CurrentData = {
         Replicate = function(_, name)
-            assert(name == "CosmeticInventory")
-            refreshes += 1
+            refreshes[name] = (refreshes[name] or 0) + 1
+            if name == "WeaponInventory" then
+                weaponInventorySignal:Fire()
+            end
         end,
     },
 }
@@ -54,124 +82,198 @@ function playerDataController:Get(name)
     end
     error("Unexpected player data key: " .. tostring(name))
 end
+function playerDataController:GetDataChangedSignal(name)
+    assert(name == "WeaponInventory")
+    return weaponInventorySignal
+end
+function playerDataController:GetWeaponData(name)
+    for _, weapon in ipairs(weaponInventory) do
+        if weapon.Name == name then
+            return weapon
+        end
+    end
+    return nil
+end
+
+local equipmentState = {
+    SelectedWeapon = "Assault Rifle",
+    CustomizingType = "Skin",
+    CosmeticInverted = nil,
+}
+local equipmentStateLibrary = {}
+function equipmentStateLibrary.SelectCosmetic(state, cosmetic)
+    state.SelectedCosmetic = cosmetic ~= NONE and cosmetic or nil
+end
+local originalSelectCosmetic = equipmentStateLibrary.SelectCosmetic
 
 local equips = {}
 local equipCosmetic = {}
-function equipCosmetic:FireServer(weapon, cosmeticType, skin, options)
+function equipCosmetic:FireServer(weapon, cosmeticType, name, options)
     table.insert(equips, {
         weapon = weapon,
         cosmeticType = cosmeticType,
-        skin = skin,
+        name = name,
         options = options,
     })
 end
 
-local persisted = {}
+local restoreWrites = {}
+local equippedWrites = {}
 local function runtime()
     return SkinUnlock.new({
         cosmeticLibrary = cosmeticLibrary,
+        equipmentState = equipmentState,
+        equipmentStateLibrary = equipmentStateLibrary,
         equipCosmetic = equipCosmetic,
-        onRestoreChanged = function(snapshot)
-            table.insert(persisted, copyMap(snapshot))
+        onEquippedChanged = function(cosmetics)
+            table.insert(equippedWrites, SkinUnlock.encodeRestore(cosmetics))
+        end,
+        onRestoreChanged = function(cosmetics)
+            table.insert(restoreWrites, SkinUnlock.encodeRestore(cosmetics))
         end,
         playerDataController = playerDataController,
     })
 end
 
 local unlock = runtime()
-unlock:update({ unlockAllSkins = true, unlockAllSkinsRestore = {} })
-local saved = persisted[#persisted]
-assert(saved["Assault Rifle"] == "Owned Skin", "enable must remember an equipped owned skin")
-assert(saved.Handgun == NONE, "legacy unowned equipped skins must safely restore to none")
-assert(saved.Bow == NONE, "weapons without a skin must restore to none")
-assert(cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Visible Skin", "Assault Rifle") == true)
-assert(
-    cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Hidden Skin", "Assault Rifle") == false,
-    "hidden skins must remain unavailable"
-)
-assert(
-    cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Wrap", "Assault Rifle") == false,
-    "the override must not unlock non-skin cosmetics"
-)
-assert(cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Owned Skin", "Assault Rifle") == true)
-assert(refreshes == 1, "enabling must refresh the native cosmetics UI")
+unlock:update({
+    unlockAllSkins = true,
+    unlockAllSkinsRestore = {},
+    unlockAllCosmeticsEquipped = {},
+})
+local saved = restoreWrites[#restoreWrites]
+assert(findEntry(saved, "Assault Rifle", "Skin").name == "Owned Skin")
+assert(findEntry(saved, "Assault Rifle", "Wrap").name == "Owned Wrap")
+assert(findEntry(saved, "Assault Rifle", "Charm").name == NONE)
+assert(findEntry(saved, "Assault Rifle", "Finisher").name == NONE)
+assert(findEntry(saved, "Handgun", "Skin").name == NONE)
+assert(cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Visible Skin", "Assault Rifle"))
+assert(cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Visible Wrap", "Assault Rifle"))
+assert(cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Visible Charm", "Assault Rifle"))
+assert(cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Visible Finisher", "Assault Rifle"))
+assert(not cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Hidden Skin", "Assault Rifle"))
+assert(not cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Hidden Wrap", "Assault Rifle"))
+assert(not cosmeticLibrary:OwnsCosmetic(cosmeticInventory, "Emote", "Assault Rifle"))
+assert(equipmentStateLibrary.SelectCosmetic ~= originalSelectCosmetic)
 
-weaponInventory[1].Skin = { Name = "Visible Skin" }
-unlock:update({ unlockAllSkins = false, unlockAllSkinsRestore = saved })
+for cosmeticType, name in pairs({
+    Skin = "Visible Skin",
+    Wrap = "Visible Wrap",
+    Charm = "Visible Charm",
+    Finisher = "Visible Finisher",
+}) do
+    equipmentState.CustomizingType = cosmeticType
+    equipmentState.CosmeticInverted = cosmeticType == "Wrap" and true or nil
+    equipmentStateLibrary.SelectCosmetic(equipmentState, name)
+    assert(weaponInventory[1][cosmeticType].Name == name)
+end
+assert(weaponInventory[1].Wrap.Inverted == true)
+local locallyEquipped = equippedWrites[#equippedWrites]
+assert(findEntry(locallyEquipped, "Assault Rifle", "Skin").name == "Visible Skin")
+assert(findEntry(locallyEquipped, "Assault Rifle", "Wrap").inverted == true)
+assert(findEntry(locallyEquipped, "Assault Rifle", "Charm").name == "Visible Charm")
+assert(findEntry(locallyEquipped, "Assault Rifle", "Finisher").name == "Visible Finisher")
+assert((refreshes.WeaponInventory or 0) >= 5, "local selections must refresh equipped state")
+weaponInventory[1].Skin = { Name = "Owned Skin" }
+weaponInventorySignal:Fire()
 assert(
-    cosmeticLibrary.OwnsCosmetic == originalOwnsCosmetic,
-    "disable must restore native ownership"
+    weaponInventory[1].Skin.Name == "Visible Skin",
+    "server inventory refreshes must reapply the persisted local selection"
 )
-assert(#equips == 2, "disable must restore changed equipped skins")
-assert(equips[1].weapon == "Assault Rifle" and equips[1].skin == "Owned Skin")
-assert(equips[1].cosmeticType == "Skin" and type(equips[1].options) == "table")
-assert(equips[2].weapon == "Handgun" and equips[2].skin == NONE)
-assert(next(persisted[#persisted]) == nil, "disable must clear the persisted restore snapshot")
-assert(refreshes == 2, "disabling must refresh the native cosmetics UI")
 
-local existingSnapshot = { ["Assault Rifle"] = "Owned Skin" }
-local encodedSnapshot = SkinUnlock.encodeRestore(existingSnapshot)
-assert(
-    #encodedSnapshot == 1
-        and encodedSnapshot[1].weapon == "Assault Rifle"
-        and encodedSnapshot[1].skin == "Owned Skin"
-)
-local persistedBeforeReload = #persisted
-local reload = runtime()
-reload:update({ unlockAllSkins = true, unlockAllSkinsRestore = encodedSnapshot })
-assert(
-    #persisted == persistedBeforeReload,
-    "hub reload must reuse an existing restore snapshot instead of replacing it"
-)
-local equipsBeforeStop = #equips
-reload:stop()
+unlock:update({
+    unlockAllSkins = false,
+    unlockAllSkinsRestore = saved,
+    unlockAllCosmeticsEquipped = locallyEquipped,
+})
 assert(cosmeticLibrary.OwnsCosmetic == originalOwnsCosmetic)
-assert(#equips == equipsBeforeStop, "hot reload must not change equipped skins")
-assert(#persisted == persistedBeforeReload, "hot reload must preserve the restore snapshot")
+assert(equipmentStateLibrary.SelectCosmetic == originalSelectCosmetic)
+assert(weaponInventory[1].Skin.Name == "Owned Skin")
+assert(weaponInventory[1].Wrap.Name == "Owned Wrap")
+assert(weaponInventory[1].Charm == nil and weaponInventory[1].Finisher == nil)
+assert(weaponInventory[2].Skin == nil, "legacy unowned equipment must safely restore to none")
+assert(next(restoreWrites[#restoreWrites]) == nil)
+assert(next(equippedWrites[#equippedWrites]) == nil)
+local restoredTypes = {}
+for _, call in ipairs(equips) do
+    if call.weapon == "Assault Rifle" then
+        restoredTypes[call.cosmeticType] = call.name
+    end
+end
+assert(restoredTypes.Skin == "Owned Skin" and restoredTypes.Wrap == "Owned Wrap")
+assert(restoredTypes.Charm == NONE and restoredTypes.Finisher == NONE)
 
-local persistedBeforeMigration = #persisted
-local legacyReload = runtime()
-legacyReload:update({ unlockAllSkins = true, unlockAllSkinsRestore = existingSnapshot })
-assert(
-    #persisted == persistedBeforeMigration + 1
-        and persisted[#persisted]["Assault Rifle"] == "Owned Skin",
-    "hub load must migrate a legacy restore map without changing its saved skin"
-)
-legacyReload:stop()
+local localReload = runtime()
+localReload:update({
+    unlockAllSkins = true,
+    unlockAllSkinsRestore = saved,
+    unlockAllCosmeticsEquipped = locallyEquipped,
+})
+assert(weaponInventory[1].Skin.Name == "Visible Skin")
+assert(weaponInventory[1].Wrap.Name == "Visible Wrap")
+local writesBeforeStop = #equippedWrites
+localReload:stop()
+assert(equipmentStateLibrary.SelectCosmetic == originalSelectCosmetic)
+assert(weaponInventory[1].Skin.Name == "Visible Skin", "hot reload must preserve local equipment")
+assert(#equippedWrites == writesBeforeStop, "hot reload must preserve local config")
+weaponInventory[1].Skin = { Name = "Owned Skin" }
+weaponInventory[1].Wrap = { Name = "Owned Wrap" }
+weaponInventory[1].Charm = nil
+weaponInventory[1].Finisher = nil
 
-weaponInventory[1].Skin = { Name = "Visible Skin" }
-local cleanup = runtime()
-cleanup:update({ unlockAllSkins = false, unlockAllSkinsRestore = encodedSnapshot })
-assert(equips[#equips].weapon == "Assault Rifle" and equips[#equips].skin == "Owned Skin")
-assert(next(persisted[#persisted]) == nil, "disabled legacy config must clear a stale snapshot")
+local legacyRestore = { ["Assault Rifle"] = "Owned Skin" }
+local migration = runtime()
+migration:update({
+    unlockAllSkins = true,
+    unlockAllSkinsRestore = legacyRestore,
+    unlockAllCosmeticsEquipped = {},
+})
+local migrated = restoreWrites[#restoreWrites]
+assert(findEntry(migrated, "Assault Rifle", "Skin").name == "Owned Skin")
+assert(findEntry(migrated, "Assault Rifle", "Wrap").name == "Owned Wrap")
+migration:stop()
 
-local store = Store.new({ settings = { unlockAllSkinsRestore = existingSnapshot } })
-local state = store:Get()
-local updated = table.clone(state.settings)
-updated.unlockAllSkinsRestore = encodedSnapshot
-store:Patch({ settings = updated })
-assert(
-    store:Get().settings.unlockAllSkinsRestore[1].skin == "Owned Skin",
-    "migration must replace the legacy map with the persisted list shape"
-)
-state = store:Get()
-updated = table.clone(state.settings)
-updated.unlockAllSkinsRestore = SkinUnlock.encodeRestore({})
-store:Patch({ settings = updated })
-assert(
-    next(store:Get().settings.unlockAllSkinsRestore) == nil,
-    "the persisted list shape must replace a stale Store snapshot when disabled"
-)
+local disabledStore = Store.new({
+    settings = {
+        unlockAllSkins = false,
+        unlockAllSkinsRestore = legacyRestore,
+        unlockAllCosmeticsEquipped = locallyEquipped,
+    },
+})
+local function persistDisabledSetting(name, cosmetics)
+    local state = disabledStore:Get()
+    local updated = table.clone(state.settings)
+    updated[name] = SkinUnlock.encodeRestore(cosmetics)
+    disabledStore:Patch({ settings = updated })
+end
+local disabledCleanup = SkinUnlock.new({
+    cosmeticLibrary = cosmeticLibrary,
+    equipmentState = equipmentState,
+    equipmentStateLibrary = equipmentStateLibrary,
+    equipCosmetic = equipCosmetic,
+    onEquippedChanged = function(cosmetics)
+        persistDisabledSetting("unlockAllCosmeticsEquipped", cosmetics)
+    end,
+    onRestoreChanged = function(cosmetics)
+        persistDisabledSetting("unlockAllSkinsRestore", cosmetics)
+    end,
+    playerDataController = playerDataController,
+})
+disabledCleanup:update(disabledStore:Get().settings)
+assert(next(disabledStore:Get().settings.unlockAllSkinsRestore) == nil)
+assert(next(disabledStore:Get().settings.unlockAllCosmeticsEquipped) == nil)
+disabledCleanup:stop()
 
 assert(Definition.defaults.unlockAllSkins == false)
 assert(type(Definition.defaults.unlockAllSkinsRestore) == "table")
+assert(type(Definition.defaults.unlockAllCosmeticsEquipped) == "table")
 assert(table.find(Definition.features.capabilities, "unlockAllSkins"))
 assert(table.find(Definition.sources, "games/rivals/features/SkinUnlock"))
 
 local adapterSource = fs.readFile("games/rivals/Adapter.lua")
 assert(adapterSource:find('require("./features/SkinUnlock")', 1, true))
 assert(adapterSource:find("skinUnlock:update(settings)", 1, true))
-assert(adapterSource:find("SkinUnlock.encodeRestore(snapshot)", 1, true))
+assert(adapterSource:find('persistCosmeticSetting("unlockAllCosmeticsEquipped"', 1, true))
 assert(adapterSource:find("skinUnlock:stop()", 1, true))
 
 print("rivals-skin-unlock-contracts-ok")

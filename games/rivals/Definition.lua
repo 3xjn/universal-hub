@@ -11,6 +11,7 @@ return {
         autoDeflect = false,
         unlockAllSkins = false,
         unlockAllSkinsRestore = {},
+        unlockAllCosmeticsEquipped = {},
         triggerDelay = 0,
     },
     features = {

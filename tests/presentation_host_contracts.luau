@@ -128,7 +128,7 @@ assertSequence(
         "option:visuals:21:showTeammates:Allies:audience",
         "option:visuals:4:noFlash:No Flash",
         "option:visuals:5:noSmoke:No Smoke",
-        "option:visuals:6:unlockAllSkins:Unlock All Skins",
+        "option:visuals:6:unlockAllSkins:Unlock All Cosmetics",
         "option:visuals:7:utilityEsp:Utility ESP",
         "cosmetics",
     },

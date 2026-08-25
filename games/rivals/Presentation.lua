@@ -117,7 +117,7 @@ function Presentation.mount(host)
     host:option("visuals", 21, "showTeammates", "Allies", "audience")
     host:option("visuals", 4, "noFlash", "No Flash")
     host:option("visuals", 5, "noSmoke", "No Smoke")
-    host:option("visuals", 6, "unlockAllSkins", "Unlock All Skins")
+    host:option("visuals", 6, "unlockAllSkins", "Unlock All Cosmetics")
     host:option("visuals", 7, "utilityEsp", "Utility ESP")
     host:cosmetics()
 end
