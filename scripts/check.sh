@@ -82,6 +82,7 @@ lune run tests/rivals_trigger_bot_contracts.luau
 lune run tests/rivals_skip_blocks_contracts.luau
 lune run tests/rivals_auto_deflect_contracts.luau
 lune run tests/rivals_item_input_contracts.luau
+lune run tests/rivals_melee_reach_contracts.luau
 lune run tests/rivals_noscope_pickup_contracts.luau
 lune run tests/rivals_skin_unlock_contracts.luau
 lune run tests/rivals_loadout_picker_contracts.luau

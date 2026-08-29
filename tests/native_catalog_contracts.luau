@@ -20,6 +20,9 @@ local settings = {
     rapidFire = false,
     fireRate = 200,
     flickProjectiles = false,
+    quickReload = false,
+    meleeReach = false,
+    meleeReachScale = 200,
     triggerDelay = 0,
     cameraFov = 58,
     cameraFullScreenAim = false,
@@ -74,6 +77,9 @@ local catalog = Catalog.new({
         "rapidFire",
         "fireRate",
         "flickProjectiles",
+        "quickReload",
+        "meleeReach",
+        "meleeReachScale",
         "skipDeflect",
         "autoDeflect",
         "alwaysScoped",
@@ -144,6 +150,9 @@ for _, control in ipairs(combat.sections[4].controls) do
     triggerIds[control.id] = control
 end
 assert(triggerIds.rapidFire == nil, "Rapid Fire must not remain under Trigger Bot")
+assert(triggerIds.quickReload and triggerIds.quickReload.label == "Quick Reload")
+assert(triggerIds.meleeReach and triggerIds.meleeReach.label == "Melee Reach")
+assert(triggerIds.meleeReachScale == nil, "Reach must wait until Melee Reach is on")
 assert(triggerIds.triggerDelay == nil, "Delay must wait until Trigger Bot is on")
 local rageControls = model.pages[2].sections[1].controls
 assert(rageControls[1].id == "teleportBehind" and rageControls[2].id == "rapidFire")
@@ -161,6 +170,19 @@ for _, control in ipairs(triggerControls) do
 end
 model.onValueChange("triggerDelay", 40, true)
 assert(settings.triggerDelay == 40)
+model.onValueChange("quickReload", true, true)
+assert(settings.quickReload == true)
+model.onValueChange("meleeReach", true, true)
+model = catalog:model(state)
+triggerIds = {}
+for _, control in ipairs(model.pages[1].sections[4].controls) do
+    triggerIds[control.id] = control
+end
+assert(triggerIds.meleeReachScale and triggerIds.meleeReachScale.parent == "meleeReach")
+assert(triggerIds.meleeReachScale.min == 100 and triggerIds.meleeReachScale.max == 300)
+assert(triggerIds.meleeReachScale.step == 5 and triggerIds.meleeReachScale.unit == "%")
+model.onValueChange("meleeReachScale", 275, true)
+assert(settings.meleeReachScale == 275)
 model.onValueChange("rapidFire", true, true)
 assert(writes[#writes][1] == "rapidFire" and writes[#writes][3] == false)
 model = catalog:model(state)

@@ -95,9 +95,19 @@ function Presentation.mount(host)
         })
     end
     host:option("trigger", 3, "quickReload", "Quick Reload")
-    host:option("trigger", 4, "skipDeflect", "Katana Stop")
-    host:option("trigger", 4, "autoDeflect", "Auto Katana")
-    host:option("trigger", 5, "alwaysScoped", "Always Scoped")
+    host:option("trigger", 4, "meleeReach", "Melee Reach")
+    if type(host.slider) == "function" then
+        host:slider("trigger", "meleeReachScale", "Reach", {
+            min = 100,
+            max = 300,
+            step = 5,
+            unit = "%",
+            parent = "meleeReach",
+        })
+    end
+    host:option("trigger", 5, "skipDeflect", "Katana Stop")
+    host:option("trigger", 5, "autoDeflect", "Auto Katana")
+    host:option("trigger", 6, "alwaysScoped", "Always Scoped")
 
     host:section("Rage", "rage", "RAGE", 70)
     host:option("rage", 1, "teleportBehind", "Warp")

@@ -47,6 +47,8 @@ the aim-plan target and `presented` is the target promoted for Silent Aim.
 - Rapid Fire reversibly changes native cooldowns and repeats normal input for
   held semi-automatic weapons. Restore every patched item when disabled,
   unequipped, replaced, or stopped.
+- Melee Reach scales only positive native reach fields and restores every
+  patched item when disabled, unequipped, replaced, or stopped.
 - `TaskFarmRuntime` is signal-driven and owns no frame loop.
 - `Effects` owns utility suppression and trajectory drawing cleanup.
 

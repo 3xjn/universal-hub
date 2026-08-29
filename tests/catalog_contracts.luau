@@ -229,6 +229,8 @@ for _, path in ipairs(Catalog) do
             expected.fireRate = 200
             expected.flickProjectiles = false
             expected.quickReload = false
+            expected.meleeReach = false
+            expected.meleeReachScale = 200
             expected.unlockAllSkins = false
             expected.unlockAllSkinsRestore = {}
             expected.unlockAllCosmeticsEquipped = {}
@@ -290,7 +292,7 @@ for _, id in ipairs({ "counterblox", "rivals", "town" }) do
         for _ in pairs(rawDefinitions[id].defaults) do
             count += 1
         end
-        defaultsAreSparse = count == 18
+        defaultsAreSparse = count == 20
             and rawDefinitions[id].defaults.aimAssistStrength == 60
             and rawDefinitions[id].defaults.autoCounter == false
             and rawDefinitions[id].defaults.redLightSafety == false
@@ -305,6 +307,8 @@ for _, id in ipairs({ "counterblox", "rivals", "town" }) do
             and rawDefinitions[id].defaults.fireRate == 200
             and rawDefinitions[id].defaults.flickProjectiles == false
             and rawDefinitions[id].defaults.quickReload == false
+            and rawDefinitions[id].defaults.meleeReach == false
+            and rawDefinitions[id].defaults.meleeReachScale == 200
             and rawDefinitions[id].defaults.unlockAllSkins == false
             and type(rawDefinitions[id].defaults.unlockAllSkinsRestore) == "table"
             and next(rawDefinitions[id].defaults.unlockAllSkinsRestore) == nil
