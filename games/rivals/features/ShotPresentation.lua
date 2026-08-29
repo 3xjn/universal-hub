@@ -5,6 +5,12 @@ local function maskedFrame(targetFrame, visibleFrame)
     return CFrame.new(targetFrame.Position) * visibleFrame.Rotation
 end
 
+local function frameFromRotation(position, rotation)
+    return CFrame.new(position)
+        * CFrame.Angles(0, rotation.Y, 0)
+        * CFrame.Angles(rotation.X, 0, 0)
+end
+
 function ShotPresentation.new(options)
     assert(options and options.cameraController, "RIVALS Shot Aim requires CameraController")
     assert(options.runService, "RIVALS Shot Aim requires RunService")
@@ -17,6 +23,7 @@ function ShotPresentation.new(options)
         cameraController = options.cameraController,
         cameraDataOriginal = nil,
         cameraDataTarget = nil,
+        flickRotation = nil,
         frameRotation = nil,
         getFighter = options.getFighter,
         hookFunction = options.hookFunction,
@@ -29,11 +36,16 @@ function ShotPresentation.new(options)
         logicalTarget = nil,
         logicalRotation = nil,
         maskedFrame = nil,
+        onCameraData = options.onCameraData or function() end,
         pendingTarget = nil,
         pendingRotation = nil,
+        passthrough = false,
         presentedTarget = nil,
         restoreFunction = options.restoreFunction,
         runService = options.runService,
+        shouldObserve = options.shouldObserve or options.isEnabled or function()
+            return false
+        end,
         stopped = false,
         targetFrame = nil,
         visibleCamera = nil,
@@ -83,6 +95,7 @@ function ShotPresentation:_stopRuntime()
 end
 
 function ShotPresentation:_reset()
+    self.flickRotation = nil
     self.frameRotation = nil
     self.logicalTarget = nil
     self.logicalRotation = nil
@@ -107,8 +120,19 @@ function ShotPresentation:clear()
     self:_reset()
 end
 
+function ShotPresentation:setPassthrough(enabled)
+    enabled = enabled == true
+    if enabled == self.passthrough then
+        return
+    end
+    self.passthrough = enabled
+    if enabled then
+        self:clear()
+    end
+end
+
 function ShotPresentation:update(rotation, target)
-    if self.stopped or typeof(rotation) ~= "Vector2" then
+    if self.stopped or self.passthrough or typeof(rotation) ~= "Vector2" then
         self:clear()
         return false
     end
@@ -131,12 +155,21 @@ function ShotPresentation:update(rotation, target)
     return true
 end
 
+function ShotPresentation:stageFlick(rotation)
+    if self.stopped or self.passthrough or typeof(rotation) ~= "Vector2" then
+        self.flickRotation = nil
+        return false
+    end
+    self.flickRotation = rotation
+    return true
+end
+
 function ShotPresentation:getPresentedTarget()
     return self.targetFrame and self.frameRotation and self.presentedTarget or nil
 end
 
 function ShotPresentation:_prepareFrame()
-    if self.stopped or not self.pendingRotation then
+    if self.stopped or self.passthrough or not self.pendingRotation then
         return
     end
     self.logicalTarget = self.pendingTarget
@@ -147,6 +180,7 @@ end
 function ShotPresentation:_maskFrame()
     if
         self.stopped
+        or self.passthrough
         or not self.logicalRotation
         or not self.visibleFrame
         or not self.visibleRotation
@@ -196,16 +230,22 @@ function ShotPresentation:refreshHook()
     if self.stopped then
         return
     end
-    if not self.isEnabled() then
+    local enabled = self.isEnabled()
+    local observing = self.shouldObserve()
+    if enabled then
+        self:_startRuntime()
+    else
+        self:_stopRuntime()
+    end
+    if not enabled and not observing then
         if self.cameraDataTarget then
             self.restoreFunction(self.cameraDataTarget)
             self.cameraDataOriginal = nil
             self.cameraDataTarget = nil
         end
-        self:_stopRuntime()
         return
     end
-    self:_startRuntime()
+
     local fighter = self.getFighter()
     local target = fighter and fighter.GetCameraData
     if target == self.cameraDataTarget then
@@ -225,11 +265,28 @@ function ShotPresentation:refreshHook()
     original = self.hookFunction(target, function(fighterSelf, ...)
         if
             self.stopped
-            or not self.isEnabled()
+            or self.passthrough
             or fighterSelf ~= self.getFighter()
             or self.isInputCaptured()
         then
             return original(fighterSelf, ...)
+        end
+
+        local enabledNow = self.isEnabled()
+        local observingNow = self.shouldObserve()
+        if not enabledNow then
+            local flickRotation = self.flickRotation
+            local camera = self.workspace.CurrentCamera
+            if observingNow and flickRotation and camera then
+                self.cameraController:SetRotation(flickRotation)
+                camera.CFrame = frameFromRotation(camera.CFrame.Position, flickRotation)
+            end
+            self.flickRotation = nil
+            local returned = table.pack(original(fighterSelf, ...))
+            if observingNow then
+                self.onCameraData()
+            end
+            return table.unpack(returned, 1, returned.n)
         end
 
         local camera = self.workspace.CurrentCamera
@@ -239,7 +296,11 @@ function ShotPresentation:refreshHook()
             or not self.targetFrame
             or not self.frameRotation
         then
-            return original(fighterSelf, ...)
+            local returned = table.pack(original(fighterSelf, ...))
+            if observingNow then
+                self.onCameraData()
+            end
+            return table.unpack(returned, 1, returned.n)
         end
 
         local localMaskedFrame = camera.CFrame
@@ -248,6 +309,9 @@ function ShotPresentation:refreshHook()
         local returned = table.pack(original(fighterSelf, ...))
         camera.CFrame = localMaskedFrame
         self.cameraController:SetRotation(self.frameRotation)
+        if observingNow then
+            self.onCameraData()
+        end
         return table.unpack(returned, 1, returned.n)
     end)
     self.cameraDataOriginal = original

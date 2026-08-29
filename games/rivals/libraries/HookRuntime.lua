@@ -11,7 +11,11 @@ end
 local NullPresentation = {}
 function NullPresentation:refreshHook() end
 function NullPresentation:clear() end
+function NullPresentation:setPassthrough() end
 function NullPresentation:update()
+    return false
+end
+function NullPresentation:stageFlick()
     return false
 end
 function NullPresentation:getPresentedTarget()
@@ -29,6 +33,7 @@ function NullSkip:stop() end
 
 function HookRuntime.new(options)
     local wantsShotAim = supports(options.capabilities, "shotAim")
+        or supports(options.capabilities, "flickProjectiles")
     local wantsScoped = supports(options.capabilities, "alwaysScoped")
     local wantsSkip = supports(options.capabilities, "skipDeflect")
     if wantsShotAim or wantsScoped or wantsSkip then

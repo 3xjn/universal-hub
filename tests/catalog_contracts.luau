@@ -215,9 +215,10 @@ for _, path in ipairs(Catalog) do
         local expectedState = expectedInitialState
         if definition.id == "rivals" then
             expected = Compatibility.Defaults()
+            expected.aimAssistStrength = 60
             expected.autoCounter = false
             expected.redLightSafety = false
-            expected.taskAutomationPaused = true
+            expected.taskAutomationEnabled = false
             expected.taskAutomationEmergencyKey = "End"
             expected.infiniteJump = false
             expected.wallNoclip = false
@@ -226,9 +227,11 @@ for _, path in ipairs(Catalog) do
             expected.autoDeflect = false
             expected.rapidFire = false
             expected.fireRate = 200
+            expected.flickProjectiles = false
             expected.quickReload = false
-            expected.meleeReach = false
-            expected.meleeReachScale = 200
+            expected.unlockAllSkins = false
+            expected.unlockAllSkinsRestore = {}
+            expected.unlockAllCosmeticsEquipped = {}
             expected.triggerDelay = 0
             expectedState = Compatibility.InitialState()
         end
@@ -287,10 +290,11 @@ for _, id in ipairs({ "counterblox", "rivals", "town" }) do
         for _ in pairs(rawDefinitions[id].defaults) do
             count += 1
         end
-        defaultsAreSparse = count == 15
+        defaultsAreSparse = count == 18
+            and rawDefinitions[id].defaults.aimAssistStrength == 60
             and rawDefinitions[id].defaults.autoCounter == false
             and rawDefinitions[id].defaults.redLightSafety == false
-            and rawDefinitions[id].defaults.taskAutomationPaused == true
+            and rawDefinitions[id].defaults.taskAutomationEnabled == false
             and rawDefinitions[id].defaults.taskAutomationEmergencyKey == "End"
             and rawDefinitions[id].defaults.infiniteJump == false
             and rawDefinitions[id].defaults.wallNoclip == false
@@ -299,9 +303,13 @@ for _, id in ipairs({ "counterblox", "rivals", "town" }) do
             and rawDefinitions[id].defaults.autoDeflect == false
             and rawDefinitions[id].defaults.rapidFire == false
             and rawDefinitions[id].defaults.fireRate == 200
+            and rawDefinitions[id].defaults.flickProjectiles == false
             and rawDefinitions[id].defaults.quickReload == false
-            and rawDefinitions[id].defaults.meleeReach == false
-            and rawDefinitions[id].defaults.meleeReachScale == 200
+            and rawDefinitions[id].defaults.unlockAllSkins == false
+            and type(rawDefinitions[id].defaults.unlockAllSkinsRestore) == "table"
+            and next(rawDefinitions[id].defaults.unlockAllSkinsRestore) == nil
+            and type(rawDefinitions[id].defaults.unlockAllCosmeticsEquipped) == "table"
+            and next(rawDefinitions[id].defaults.unlockAllCosmeticsEquipped) == nil
             and rawDefinitions[id].defaults.triggerDelay == 0
         initialStateIsSparse = next(rawDefinitions[id].initialState) == nil
     end

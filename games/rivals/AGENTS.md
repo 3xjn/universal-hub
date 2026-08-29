@@ -1,244 +1,138 @@
 # RIVALS Adapter Guide
 
-This directory owns Universal Hub's RIVALS integration. Read this file before
-opening the implementation. Start with the module named for the behavior you
-need; read `Adapter.lua` only when changing orchestration or a cross-module
-flow. New features take injected libraries from Adapter. Do not copy
-`importDependency` into a feature.
+The root `AGENTS.md` applies here. This guide contains only RIVALS-specific
+ownership and behavior. Read it before changing this integration.
 
 ## Runtime shape
 
-`games/rivals/Definition.lua` declares every RIVALS source. The packaged
-loader validates and prefetches that closed source set, then `init.lua`
-imports only the selected adapter and presentation. Add, rename, or remove
-RIVALS modules through the definition rather than a second bootstrap list.
-RIVALS has no composition module because it owns no custom startup or overlay
-actions.
+`Definition.lua` owns registration, capabilities, and the packaged source set.
+The loader imports only the selected Adapter and Presentation. RIVALS has no
+Composition because it owns no custom startup or menu actions.
 
-The adapter receives the selected scoped Hydroxide helper namespace plus a
-Limn runtime. It must not read `environment.oh`, raw `Drawing`, or a Limn
-filesystem path. Retained trajectory lines belong to a game-owned Limn canvas
-that is destroyed with the adapter.
+`Adapter.lua` is the integration surface: controller discovery, dependency
+wiring, frame ordering, and cleanup. Put behavior in `features/`, policy and
+native interpretation in `libraries/`, task automation in `tasks/`, and world
+observation/render policy in `world/`. Features receive injected dependencies
+from Adapter and use relative `require`; do not add `importDependency` shims.
 
-The per-frame flow is:
+The Adapter receives scoped Hydroxide helpers and a game-owned Limn canvas. It
+must not read `environment.oh`, raw `Drawing`, or a Limn filesystem path.
 
-1. `Adapter` reads the live RIVALS controllers and combat state.
-2. It publishes player and utility observations to the shared store/overlay.
-3. `Targeting` selects or retains a target and applies head/miss policy.
-4. `ProjectileAim` optionally replaces the direct aim point with a trajectory.
-5. Camera Aim updates the logical camera immediately. Silent Aim promotes the
-   target only after `ShotPresentation` has staged the matching native camera
-   frame.
-6. `ScopedAccuracy` optionally reports eligible native Gun shots as scoped
-   without changing the user's ADS/FOV state.
-7. Trigger Bot evaluates that same target, then `WeaponPolicy` decides whether
-   and how the equipped weapon may act.
-8. `Movement` and `Effects` update independently under the same combat gates.
+The per-frame order is:
 
-## Module map
+1. Read native controllers and combat state.
+2. Publish player and utility observations.
+3. Select or retain one target and apply head/miss policy.
+4. Solve direct, projectile, ricochet, slingshot, or splash aim.
+5. Camera Aim updates logical aim; Silent Aim promotes only a target staged by
+   `ShotPresentation`.
+6. Trigger Bot evaluates that same target through `WeaponPolicy`.
+7. Movement, deflection, and Effects update under the same combat gates.
 
-Root is the integration surface only: `Adapter.lua`, `Definition.lua`,
-`Presentation.lua`, `Session.lua`. Everything else lives in `features/`,
-`libraries/`, `tasks/`, or `world/`. New features take injected libraries
-from Adapter. Do not copy `importDependency` into a feature.
+`Session.lua` is one frame snapshot. Each field has one writer: `aligned` is
+the aim-plan target and `presented` is the target promoted for Silent Aim.
 
-- `Adapter.lua`
-  - RIVALS manifest and capabilities.
-  - Live controller discovery and dependency wiring.
-  - Observation refresh, target retention, per-frame orchestration, input
-    dispatch, and weapon-specific coordination.
-- `Session.lua`
-  - One per-frame snapshot. Features read it; each field has one writer.
-  - `aligned` is the aim-plan target. `presented` is Silent Aim's promoted target.
-- `features/CameraAim.lua`
-  - Writes the aim-plan value that Adapter stores on `session.aligned`.
-  - User-facing Camera Aim (`settings.silentAim`). Does not write `presented`.
-  - Prefers a visible target inside the Camera FOV, then falls back to a
-    blocked target inside that same FOV. Through-wall unrestricted acquisition
-    belongs to Silent Aim and task combat.
-- `features/SilentAim.lua`
-  - Reads `session.aligned` and writes `session.presented`.
-  - Owns `features/ShotPresentation.lua`.
-- `features/TeleportBehind.lua`
-  - User-facing Warp (`settings.teleportBehind`) on the Rage page.
-    Irregular hops around the selected target at hitscan height
-    with line of sight. From a sky slot, aim at the torso so the
-    downward shot hits the body, not over the head. If the sky
-    slot is blocked, fall in to a close pocket. A sniper or knife
-    holds a one-shot angle instead of hopping; other guns keep
-    the barrage. Do not
-    walk a sequential ring. Hold the first grounded focus Y so
-    two teleporters do not stack into the lid. Pull a slot in if
-    it clips a tagged OOB part. Do not engage during a ForceField
-    or entity invincibility.
-  - Rewrites the hold after physics (`Heartbeat`). Do not Anchor the
-    root — that stops CFrame from replicating. Zero velocity instead.
-  - Once engaged, keep holding if combat/camera flickers or the menu
-    opens. Release only on setting off or death.
-- `features/TriggerBot.lua`
-  - Reads `presented` when Silent Aim is on, otherwise `aligned`. Does not reselect.
-  - Fires on the equipped weapon's native cooldown. Do not add a
-    0.1s floor. Keep a hold-to-fire press through one-frame path
-    flicker. Native automatic guns repeat `StartShooting` without a
-    release gap; continuous InternalUse weapons keep one held press and
-    may re-press only after their native cooldown stays expired for a
-    full fire interval. Do not restart because ammo replicas are stale.
-    Compare `item._shoot_cooldown` with `tick`, never `os.clock`. With both
-    aim modes off, use the native mouse ray hit instead of a screen-radius
-    heuristic or nearest full-screen target. Release when the target is deflecting, even if the
-    blade blocks line of sight. Do not keep a hold through that.
-    `settings.triggerDelay` is a first-shot wait in milliseconds; do
-    not add it to the native cooldown after the hold starts. Only multi-pellet
-    shotguns may gate severe falloff; low-damage poke from other weapons is intentional.
-- `features/RapidFire.lua`
-  - User-facing Rapid Fire. Reversibly scales native `ShootCooldown`, melee
-    `AttackCooldown`, and Bow `ChargeReleaseCooldown`; repeats normal primary-fire
-    input for held semi-automatic and burst-input weapons. Restore every patched
-    item when disabled, unequipped, or stopped.
-- `features/QuickReload.lua`
-  - User-facing Quick Reload. Ends normal and empty reloads at their native ammo
-    insertion timestamps, removing only the post-ammo animation lockout. Restore
-    every patched length when disabled, unequipped, or stopped.
-- `features/MeleeReach.lua`
-  - User-facing Melee Reach. Reversibly scales native `AttackReach`,
-    `HeavyAttackReach`, and `BladeReach` while leaving native input and hit
-    registration untouched. Restore every patched item on disable, switch, or stop.
-- `features/SkipBlocks.lua`
-  - User-facing Katana Stop (`settings.skipDeflect`). Hooks fighter input's
-    `StartShooting` action so a manual click does not fire into a deflect
-    unless true-damage spray applies. Same gate as Trigger Bot.
-- `features/AutoDeflect.lua`
-  - User-facing Auto Katana (`settings.autoDeflect`). Pre-blocks with
-    the equipped deflector when an opponent is looking at us and that
-    shot would be lethal. Katana reflect does not require ADS. Hitscan
-    plus ping means do not wait for the shot. Do not invent latency
-    compensation.
-- `features/AutoCounter.lua`
-  - Detect-and-shoot only. Must not write fighter `CFrame`.
-- `features/NoScope.lua`
-  - User-facing Always Scoped. Stored setting stays `alwaysScoped`.
-- `features/Pickup.lua`
-  - Gates Gun Game pickup behind `settings.autoPickup`. Keep the
-    Tools capability even when execute is not already in Gun Game.
-- `features/ScopedAccuracy.lua`
-  - No Scope guts.
-- `tasks/TaskLoadout.lua`
-  - Native `PickWeapon` + `Finish` poll while task farming is armed.
-    Private/paused matches leave the picker to the player.
-- `libraries/CombatState.lua`
-  - Practice range is eligible only while its loadout picker is closed.
-  - Duels are eligible only at `Status == "RoundStarted"`.
-- `libraries/Targeting.lua`
-  - Nearest/retained observation selection, humanized rotation, head/miss policy.
-- `libraries/ProjectileAim.lua`
-  - Direct projectile lead/gravity, splash, ricochet, and Slingshot helpers.
-- `libraries/WeaponPolicy.lua` / `libraries/ItemPolicy.lua`
-  - Item labels, damage/falloff, ADS, hold-to-fire, Bow, Revolver, Knife, Gunblade.
-    Continuous InternalUse weapons (no ShootDamage) still get Trigger Bot.
-- `libraries/Movement.lua`
-  - Bunny hop and slide behind active/combat/input-capture gates.
-- `tasks/TaskPolicy.lua`
-  - Pure normalization and selection for native task records.
-- `tasks/TaskFarmRuntime.lua`
-  - Signal-driven inherent task detection. Owns no frame loop.
-- `world/Effects.lua`
-  - Utility discovery, visibility suppression, and trajectory drawing.
+## Cross-Module contracts
+
+- `CameraAim` writes `session.aligned`; it never writes `presented`.
+- `SilentAim` owns `ShotPresentation` and writes `session.presented` only after
+  the matching native camera frame is staged.
+- Trigger Bot reads `presented` while Silent Aim is enabled and otherwise reads
+  `aligned`; it does not reselect.
+- `HookRuntime` owns optional Shot Aim, Always Scoped, and Katana Stop hooks.
+  Hook primitives are required only for declared capabilities.
+- Warp owns its Heartbeat hold and releases only when disabled or the character
+  dies. It must reject ForceFields, invincibility, and blocked/OOB slots without
+  Anchoring the root.
+- Rapid Fire reversibly changes native cooldowns and repeats normal input for
+  held semi-automatic weapons. Restore every patched item when disabled,
+  unequipped, replaced, or stopped.
+- `TaskFarmRuntime` is signal-driven and owns no frame loop.
+- `Effects` owns utility suppression and trajectory drawing cleanup.
 
 ## Names that are easy to misread
 
-The persisted setting names predate the current UI labels:
-
 - `settings.silentAim` is user-facing **Camera Aim**.
 - `settings.shotAim` is user-facing **Silent Aim**.
+- `settings.alwaysScoped` is user-facing **Always Scoped**; its Implementation
+  remains `ScopedAccuracy`.
 
-Use the setting names in code and the user-facing names in UI copy. Never
-infer behavior from the setting name alone.
+Use persisted names in code and user-facing names in Presentation copy.
 
 ## Invariants
 
 - Do not fire during lobby, map voting, round countdown, or either loadout
-  picker. `CanPickWeapons` is permission, not proof that the picker is open;
-  use the live Pick Weapons page through `CombatState`.
-- Camera Aim, Silent Aim, and Trigger Bot must consume the same selected
-  target. Retain a valid target rather than switching every frame.
-- Trigger Bot fires on a solved bullet path (hitscan LOS, projectile lead,
-  ricochet, slingshot, or splash), not on-screen visibility alone.
-- Silent Aim actions must wait for `ShotPresentation:getPresentedTarget()`.
-  Never reselect inside a Silent Aim trigger branch; that bypasses the
-  presentation-before-action guarantee.
-- Gunblade may use its closest eligible world-space target and ignore normal
-  screen FOV only when Silent Aim is off. With Silent Aim on, it uses the
-  presented target. Slice on the first frame inside `BladeReach` for which
-  `CanQuickAttack()` is true; do not wait for the visual dash duration.
-- Revolver spread is nondeterministic client-side. Choose fan versus precise
-  only when the complete configured cone fits the selected target. Do not
-  claim spread removal or inverse compensation without new server-backed
+  picker. `CanPickWeapons` is permission, not proof that a picker is open.
+- Camera Aim, Silent Aim, and Trigger Bot consume the same retained target.
+- Trigger Bot fires only on a solved path. On-screen visibility alone is not a
+  firing solution.
+- Trigger Bot uses the equipped item's native cooldown. Do not add a `0.1`
+  floor or latency compensation. Compare `_shoot_cooldown` with `tick`, not
+  `os.clock`.
+- Native automatic guns may repeat `StartShooting` without a release gap.
+  Continuous `InternalUse` weapons keep one held press and may re-press only
+  after the native cooldown remains expired for a full fire interval.
+- With both aim modes disabled, Trigger Bot uses the native mouse-ray hit; it
+  does not substitute nearest-target or screen-radius selection. Release held
+  fire when the target is deflecting.
+- `triggerDelay` is a first-shot delay only. Do not add it to subsequent native
+  cooldowns.
+- Silent Aim actions wait for `ShotPresentation:getPresentedTarget()` and never
+  reselect inside the action branch.
+- Gunblade ignores normal screen FOV only for its closest eligible world target
+  while Silent Aim is off. Strike only when `CanQuickAttack()` is positively
+  ready; do not infer readiness from visual dash timing.
+- Revolver fan-versus-precise selection requires the complete configured cone
+  to fit the target. Do not claim spread removal without server-backed
   evidence.
-- Bow charge changes damage, not its observed projectile speed. Direct
-  projectile solving must apply the weapon's `ProjectileSpawnOffset` before
-  iterating lead and gravity. Do not add speculative latency or
-  shooter-velocity inheritance.
-- Head preference must use live critical `HitboxHead`/`HitboxHeadSmall`
-  geometry before the smaller visual Head, then test center and bounded crown
-  points. A body part in front of the point is not a head hit; accept only
-  target-descendant native head proxies or parts explicitly marked
-  `IsCritical`.
-- Always Scoped is opt-in and may only override the equipped item when it
-  exposes the common native `IsFullyAiming` seam and a positive numeric
-  `AimScopePercent`. Keep normal ADS readiness on the native predicate; camera
-  FOV is fallback evidence only. The stored setting and capability key is
-  `alwaysScoped`; the internal implementation module remains `ScopedAccuracy`.
-- Utility ESP classification is tag-first and must reject held/viewmodel/local
-  copies. Tripmine renders as a 12-edge wireframe cube; generic utilities keep
-  their compact marker.
-- Use normal client input and native controller/item methods for actions.
-  Direct replication calls are discovery evidence, not an implementation
-  shortcut.
-- RIVALS client internals are volatile. Re-establish live paths, fields,
-  cooldowns, and server acceptance before changing behavior based on them.
+- Bow charge changes damage, not observed projectile speed. Apply
+  `ProjectileSpawnOffset` before solving lead and gravity; do not invent
+  latency or shooter-velocity compensation.
+- Head preference uses live critical hitbox geometry before visual Head and
+  accepts only target-descendant critical proxies or explicitly critical parts.
+- Always Scoped is opt-in and requires the native `IsFullyAiming` Seam plus a
+  positive numeric `AimScopePercent`. Camera FOV is fallback evidence only.
+- Auto Katana pre-blocks only from positive native combat evidence; it does not
+  wait for a hitscan shot or invent latency compensation.
+- Utility classification is tag-first and rejects held, viewmodel, and local
+  copies.
+- Use normal client input and native controller/item methods. Direct replication
+  calls are discovery evidence, not an Implementation shortcut.
+- RIVALS internals are volatile. Re-establish live paths, fields, cooldowns,
+  return values, and server acceptance before changing behavior around them.
 
 ## Live validation
 
-For authorized RIVALS testing:
+For authorized testing:
 
-1. Confirm the connected Roblox client before trusting runtime observations.
-2. Prefer read-only status, evaluation, script inventory, and decompilation for
-   discovery.
-3. Stage this repo into Volt's workspace (`%LOCALAPPDATA%\Volt\workspace`) at
-   `universal-hub/local`, plus Hydroxide helpers at `hydroxide/local` and Limn
-   at `limn/dist/Limn.lua`. Confirm, then load with Volt `loadfile`:
-
-   ```lua
-   assert(isfile("universal-hub/local/local.lua"), "stage the hub tree first")
-   loadfile("universal-hub/local/local.lua")()
-   ```
-
-4. Validate state-changing behavior through normal game/client paths against
+1. Confirm the connected client before trusting observations.
+2. Prefer read-only status, script inventory, and decompilation for discovery.
+3. Stage through the repository tooling with local paths supplied by documented
+   environment variables; do not commit personal workspace paths.
+4. Exercise state-changing behavior through normal game/client paths against
    practice dummies or consenting players.
-5. Restore temporary settings and loadouts after QA. If the live client blocks
-   the observation, report the gap instead of converting a contract test into
-   a live claim.
+5. Restore temporary settings and loadouts. Report blocked live observations
+   instead of turning a pure contract into a runtime claim.
 
 Never expose executor or MCP credentials in source, logs, artifacts, or
 handoffs.
 
 ## Verification
 
-Focused contracts:
+Run the focused contract for the changed behavior. Common integration checks:
 
 ```bash
-HYDROXIDE_ROOT='C:/git/hydroxide' lune run tests/rivals_adapter_contracts.luau
-HYDROXIDE_ROOT='C:/git/hydroxide' lune run tests/rivals_combat_state_contracts.luau
-HYDROXIDE_ROOT='C:/git/hydroxide' lune run tests/overlay_contracts.luau
+lune run tests/rivals_adapter_contracts.luau
+lune run tests/rivals_combat_state_contracts.luau
+lune run tests/overlay_contracts.luau
 ```
 
-Full repository gate:
+Then run the root gate when its declared prerequisites are available:
 
 ```bash
-HYDROXIDE_ROOT='C:/git/hydroxide' ./scripts/check.sh
+bash scripts/check.sh
 ```
 
-Add a behavioral contract for subtle cross-module boundaries, especially
-phase gates, target presentation, projectile launch math, and weapon state
-machines. A green pure contract does not replace live QA when runtime behavior
-is the claim.
+Prefer behavioral contracts for phase gates, target presentation, projectile
+math, input ownership, cleanup, and weapon state machines. Pure contracts do
+not replace live QA for runtime claims.

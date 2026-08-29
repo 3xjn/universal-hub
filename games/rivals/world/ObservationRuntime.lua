@@ -1,6 +1,8 @@
 local ObservationRuntime = {}
 ObservationRuntime.__index = ObservationRuntime
 
+local MOTION_WINDOW = 0.1
+
 function ObservationRuntime.rangeHealth(humanoid)
     local health = humanoid.Health
     local maximum = humanoid.MaxHealth
@@ -15,12 +17,14 @@ function ObservationRuntime.new(options)
     assert(options.workspace, "RIVALS observations require Workspace")
     assert(options.getFighter, "RIVALS observations require a fighter getter")
     return setmetatable({
+        clock = options.clock or os.clock,
         effects = options.effects,
         equippedWeapon = options.equippedWeapon,
         getFighter = options.getFighter,
         getPlayerTone = options.getPlayerTone,
         isOpponent = options.isOpponent,
         maximumDistance = options.maximumDistance or 2000,
+        motion = setmetatable({}, { __mode = "k" }),
         players = options.players,
         targeting = options.targeting,
         workspace = options.workspace,
@@ -42,6 +46,36 @@ local function offscreenObservation(cameraPosition, character, player)
         position = root.Position,
         visible = false,
     }
+end
+
+function ObservationRuntime:_sampleVelocity(observation, now)
+    local character = observation.character
+    local root = character
+        and type(character.FindFirstChild) == "function"
+        and character:FindFirstChild("HumanoidRootPart")
+    local native = root and (root.AssemblyLinearVelocity or root.Velocity)
+    if not root or typeof(root.Position) ~= "Vector3" or typeof(native) ~= "Vector3" then
+        return
+    end
+
+    local samples = self.motion[character]
+    if not samples then
+        samples = {}
+        self.motion[character] = samples
+    end
+    table.insert(samples, { at = now, position = root.Position })
+    while #samples > 2 and samples[2].at <= now - MOTION_WINDOW do
+        table.remove(samples, 1)
+    end
+
+    local first = samples[1]
+    local last = samples[#samples]
+    local elapsed = last.at - first.at
+    local vertical = native.Y
+    if elapsed > 0 then
+        vertical = (last.position.Y - first.position.Y) / elapsed
+    end
+    observation.velocity = Vector3.new(native.X, vertical, native.Z)
 end
 
 function ObservationRuntime:update(screenOrigin, includeTeammates, includeEnemies, include360)
@@ -128,7 +162,9 @@ function ObservationRuntime:update(screenOrigin, includeTeammates, includeEnemie
             end
         end
     end
+    local now = self.clock()
     for _, observation in ipairs(nearby) do
+        self:_sampleVelocity(observation, now)
         if observation.player ~= observation.character then
             local character = observation.character
             local humanoid = character and character:FindFirstChildOfClass("Humanoid")

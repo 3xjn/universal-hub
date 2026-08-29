@@ -79,6 +79,15 @@ equippedItem =
 gatedFighter.EquippedItem = equippedItem
 assert(input:pressFire() == true, "true damage must bypass deflection")
 input:releaseAll()
+assert(input:pressAim() == true and input:isAimHeld() == true)
+local disownActionCount = #gatedActions
+input:disownAim()
+assert(input:isAimHeld() == false and #gatedActions == disownActionCount)
+input:releaseAll()
+assert(
+    #gatedActions == disownActionCount,
+    "Transferring aim ownership to held user input must not dispatch FinishAiming"
+)
 
 equippedItem = {
     _attack_hash = 3,

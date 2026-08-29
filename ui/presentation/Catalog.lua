@@ -159,6 +159,7 @@ function Catalog:aim()
         or self.available.shotAim
         or self.available.triggerBot
         or self.available.aimSmoothness
+        or self.available.aimAssistStrength
         or self.available.headshotRate
         or self.available.missRate
     if self.hasAim or not supported then
@@ -415,12 +416,20 @@ function Catalog:model(state)
             },
         }
         for _, related in ipairs(segment.related or {}) do
-            if related.when == selected and self.available[related.id] then
+            local kind = related.kind or "toggle"
+            local parentActive = not related.parent or settings[related.parent] == true
+            if related.when == selected and self.available[related.id] and parentActive then
+                local value = settings[related.id]
                 append(controls, {
                     id = related.id,
-                    kind = related.kind or "toggle",
+                    kind = kind,
                     label = related.label,
-                    value = settings[related.id] == true,
+                    max = kind == "slider" and (related.max or 100) or nil,
+                    min = kind == "slider" and (related.min or 0) or nil,
+                    parent = related.parent,
+                    step = kind == "slider" and (related.step or 1) or nil,
+                    unit = kind == "slider" and related.unit or nil,
+                    value = kind == "slider" and value or value == true,
                     status = self.optionSupport[related.id] == false and "unavailable"
                         or "available",
                 })
@@ -500,11 +509,11 @@ function Catalog:model(state)
 
     for _, group in ipairs(self.groups) do
         if
-            group.renderEmpty
-            or #group.actions > 0
+            #group.actions > 0
             or #group.options > 0
             or #group.keybinds > 0
             or #group.sliders > 0
+            or group.renderEmpty
         then
             local controls = {}
             for _, action in ipairs(group.actions) do
@@ -964,7 +973,11 @@ function Catalog:model(state)
                         for _, related in ipairs(segment.related or {}) do
                             local retained = self.relatedValues[related.id]
                             if related.when == value and retained ~= nil then
-                                self.context.setOption(related.id, retained, shouldPersist)
+                                if type(retained) == "boolean" then
+                                    self.context.setOption(related.id, retained, shouldPersist)
+                                else
+                                    self.context.setRate(related.id, retained, shouldPersist)
+                                end
                             end
                         end
                         if id == "aimMode" then

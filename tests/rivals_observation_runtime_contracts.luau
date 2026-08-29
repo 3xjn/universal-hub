@@ -132,4 +132,55 @@ assert(
     "a hit range dummy must remain observable while RIVALS reparents it into HurtEffect"
 )
 
+local motionClock = 0
+local motionRoot = {
+    AssemblyLinearVelocity = Vector3.new(30, 12, 0),
+    Position = Vector3.zero,
+}
+local motionCharacter = {}
+function motionCharacter:FindFirstChild(name)
+    return name == "HumanoidRootPart" and motionRoot or nil
+end
+function motionCharacter:FindFirstChildOfClass(className)
+    return className == "Humanoid" and { Health = 100, MaxHealth = 100 } or nil
+end
+local motionObservation = {
+    character = motionCharacter,
+    player = {},
+    position = motionRoot.Position,
+}
+local motionRuntime = ObservationRuntime.new({
+    clock = function()
+        return motionClock
+    end,
+    getFighter = function()
+        return nil
+    end,
+    isOpponent = function()
+        return true
+    end,
+    targeting = {
+        observePlayers = function()
+            motionObservation.position = motionRoot.Position
+            return { motionObservation }
+        end,
+    },
+    workspace = workspace,
+})
+motionRuntime:update(Vector2.zero)
+motionClock = 0.05
+motionRuntime:update(Vector2.zero)
+assert(
+    motionObservation.velocity == Vector3.new(30, 0, 0),
+    "sampled motion must remove native vertical velocity when position is stationary"
+)
+motionClock = 0.1
+motionRoot.Position = Vector3.new(3, 0.5, 0)
+motionRuntime:update(Vector2.zero)
+assert(
+    math.abs(motionObservation.velocity.X - 30) < 1e-6
+        and math.abs(motionObservation.velocity.Y - 5) < 1e-6,
+    "sampled motion must preserve real vertical displacement without dropping horizontal lead"
+)
+
 print("rivals-observation-runtime-contracts-ok")

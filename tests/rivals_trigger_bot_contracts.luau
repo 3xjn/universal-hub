@@ -262,7 +262,7 @@ assert(
                 return true
             end,
             solveProjectileAim = function()
-                return nil
+                return { direction = Vector3.new(0, 0, -1) }
             end,
         },
         camera = ctx.camera,
@@ -314,6 +314,122 @@ ctx.raycast = function()
     return nil
 end
 clicked = 0
+state.nextAt = 0
+
+local retainedCharacter = {}
+session.settings.humanAim = true
+session.settings.aimSmoothness = 80
+session.aligned = {
+    aimSettled = false,
+    character = retainedCharacter,
+    position = Vector3.new(0, 0, 10),
+    visible = true,
+}
+ctx.alignedTarget = session.aligned
+ctx.selectCrosshairTarget = function()
+    return {
+        character = retainedCharacter,
+        position = Vector3.new(0, 0, 10),
+        visible = true,
+    }
+end
+TriggerBot.update(session, ctx)
+assert(
+    clicked == 0 and ctx.taskDebug.triggerStage == "aim-settling",
+    "Trigger Bot must wait for the configured head plan instead of firing on the target body"
+)
+
+session.aligned.aimSettled = false
+ctx.selectCrosshairTarget = function()
+    return {
+        character = {},
+        position = Vector3.new(0, 0, 10),
+        visible = true,
+    }
+end
+TriggerBot.update(session, ctx)
+assert(
+    clicked == 0 and ctx.taskDebug.triggerStage == "aim-settling",
+    "Smoothed Camera Aim must not fire until its retained target rotation settles"
+)
+
+session.aligned.projectileAim = { direction = Vector3.new(0, 0, -1) }
+ctx.selectCrosshairTarget = function()
+    return {
+        character = retainedCharacter,
+        position = Vector3.new(0, 0, 10),
+        visible = true,
+    }
+end
+TriggerBot.update(session, ctx)
+assert(
+    clicked == 0 and ctx.taskDebug.triggerStage == "aim-settling",
+    "A smoothed projectile solution must wait for its solved lead rotation to settle"
+)
+
+local chargedBow = { Info = { ShootCooldown = 0.25 } }
+local aimReleases = 0
+ctx.getFighter = function()
+    return { EquippedItem = chargedBow }
+end
+ctx.weaponPolicy.isChargedBow = function(candidate)
+    return candidate == chargedBow
+end
+ctx.aimRelease = function()
+    aimReleases += 1
+end
+state.held = true
+state.heldItem = chargedBow
+session.aligned.aimSettled = false
+ctx.alignedTarget = session.aligned
+TriggerBot.update(session, ctx)
+assert(
+    state.held == true
+        and aimReleases == 0
+        and ctx.taskDebug.triggerStage == "aim-settling",
+    "A charging Bow must hold through projectile re-alignment instead of releasing a miss"
+)
+local disownedAims = 0
+local manualAimPresses = 0
+ctx.isAimInputHeld = function()
+    return true
+end
+ctx.disownAim = function()
+    disownedAims += 1
+end
+ctx.aimPress = function()
+    manualAimPresses += 1
+end
+session.aligned.aimSettled = true
+state.nextAt = 0
+TriggerBot.update(session, ctx)
+assert(
+    state.held == false
+        and state.heldItem == nil
+        and disownedAims == 1
+        and manualAimPresses == 0
+        and aimReleases == 0
+        and ctx.taskDebug.triggerStage == "manual-aim",
+    "Trigger Bot must transfer Bow aim ownership without releasing held right-click input"
+)
+ctx.isAimInputHeld = nil
+ctx.disownAim = nil
+state.held = false
+state.heldItem = nil
+ctx.getFighter = function()
+    return { EquippedItem = { Info = { ShootCooldown = 0.1 } } }
+end
+ctx.weaponPolicy.isChargedBow = function()
+    return false
+end
+ctx.aimRelease = function() end
+
+session.settings.humanAim = false
+session.aligned = { visible = true, position = Vector3.new(0, 0, 10), aimSettled = true }
+ctx.alignedTarget = session.aligned
+ctx.selectCrosshairTarget = function()
+    return nil
+end
 state.nextAt = 0
 session.settings.triggerDelay = 40
 clicked = 0

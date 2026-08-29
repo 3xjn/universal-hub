@@ -117,6 +117,13 @@ function Config:load(defaults)
     local success, decoded = pcall(self.decode, self.readFile(self.path))
     if success then
         if type(decoded) == "table" then
+            if
+                decoded.taskAutomationEnabled == nil
+                and type(decoded.taskAutomationPaused) == "boolean"
+            then
+                decoded.taskAutomationEnabled = not decoded.taskAutomationPaused
+            end
+            decoded.taskAutomationPaused = nil
             if decoded.cameraFov == nil then
                 decoded.cameraFov = decoded.fov
             end

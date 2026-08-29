@@ -235,15 +235,17 @@ local function clearBlastToTarget(impact, target, raycast)
 end
 
 local function observationVelocity(observation)
-    local part = observation and observation.part
-    local velocity = part and (part.AssemblyLinearVelocity or part.Velocity)
-    if velocity then
-        return velocity
+    if typeof(observation and observation.velocity) == "Vector3" then
+        return observation.velocity
     end
-
     local character = observation and observation.character
-    local root = character and character:FindFirstChild("HumanoidRootPart")
-    return root and (root.AssemblyLinearVelocity or root.Velocity) or Vector3.zero
+    local root = character
+        and type(character.FindFirstChild) == "function"
+        and character:FindFirstChild("HumanoidRootPart")
+    local part = observation and observation.part
+    return root and (root.AssemblyLinearVelocity or root.Velocity)
+        or part and (part.AssemblyLinearVelocity or part.Velocity)
+        or Vector3.zero
 end
 
 local function directionFrame(origin, direction)
@@ -291,36 +293,63 @@ function ProjectileAim.solveProjectileAim(origin, observation, info, worldGravit
     local delay = math.clamp(type(launchDelay) == "number" and launchDelay or 0, 0, 0.25)
     local predictedPosition = targetPosition + targetVelocity * delay
     local launchOrigin = origin
-    local direction
-    local flightTime
 
-    for _ = 1, 6 do
-        local projectileDirection
-        projectileDirection, flightTime =
+    for _ = 1, 12 do
+        local projectileDirection, flightTime =
             ballisticDirection(launchOrigin, predictedPosition, speed, gravity)
         if not projectileDirection or not flightTime or flightTime > lifetime then
             return nil
         end
-        predictedPosition = targetPosition + targetVelocity * (delay + flightTime)
-        direction = projectileCameraDirection(projectileDirection, info)
-        launchOrigin = projectileLaunchOrigin(origin, direction, info)
+        local direction = projectileCameraDirection(projectileDirection, info)
+        local nextLaunchOrigin = projectileLaunchOrigin(origin, direction, info)
+        local nextPredictedPosition = targetPosition + targetVelocity * (delay + flightTime)
+        local converged = (nextLaunchOrigin - launchOrigin).Magnitude <= 0.01
+            and (nextPredictedPosition - predictedPosition).Magnitude <= 0.01
+        launchOrigin = nextLaunchOrigin
+        predictedPosition = nextPredictedPosition
+        if converged then
+            projectileDirection, flightTime =
+                ballisticDirection(launchOrigin, predictedPosition, speed, gravity)
+            if not projectileDirection or not flightTime or flightTime > lifetime then
+                return nil
+            end
+            direction = projectileCameraDirection(projectileDirection, info)
+            return {
+                direction = direction,
+                flightTime = flightTime,
+                launchOrigin = projectileLaunchOrigin(origin, direction, info),
+                predictedPosition = targetPosition + targetVelocity * (delay + flightTime),
+                projectileDirection = projectileDirection,
+            }
+        end
     end
 
-    local projectileDirection
-    projectileDirection, flightTime =
-        ballisticDirection(launchOrigin, predictedPosition, speed, gravity)
-    if not projectileDirection or not flightTime or flightTime > lifetime then
-        return nil
+    return nil
+end
+
+function ProjectileAim.directPathClear(solution, info, raycast, worldGravity)
+    local speed = info and info.ProjectileSpeed
+    local flightTime = solution and solution.flightTime
+    if
+        type(raycast) ~= "function"
+        or typeof(solution and solution.launchOrigin) ~= "Vector3"
+        or typeof(solution and solution.projectileDirection) ~= "Vector3"
+        or type(speed) ~= "number"
+        or speed <= 0
+        or type(flightTime) ~= "number"
+        or flightTime <= 0
+    then
+        return false
     end
-    direction = projectileCameraDirection(projectileDirection, info)
-    launchOrigin = projectileLaunchOrigin(origin, direction, info)
-    return {
-        direction = direction,
-        flightTime = flightTime,
-        launchOrigin = launchOrigin,
-        predictedPosition = predictedPosition,
-        projectileDirection = projectileDirection,
-    }
+    local gravity = (worldGravity or 196.2) * (info.ProjectileGravity or 0)
+    return traceProjectile(
+        solution.launchOrigin,
+        solution.projectileDirection,
+        speed,
+        Vector3.new(0, -gravity, 0),
+        flightTime,
+        raycast
+    ) == nil
 end
 
 function ProjectileAim.solveSplashAim(

@@ -255,6 +255,7 @@ function StandardPanels.new(bridge, available)
         or available.shotAim == true
         or available.triggerBot == true
         or available.aimSmoothness == true
+        or available.aimAssistStrength == true
         or available.headshotRate == true
         or available.missRate == true
     return setmetatable({

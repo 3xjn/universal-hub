@@ -10,6 +10,7 @@ local decoded = {
     espFillAlpha = 0.73,
     fullScreenAim = true,
     silentAim = true,
+    taskAutomationPaused = false,
     teleportBehind = true,
     gloveOverride = {
         skin = "Crimson Weave",
@@ -53,6 +54,7 @@ local config = Config.new({
         assert(value.gloveOverride.skin == "Crimson Weave")
         assert(value.gloveOverride.wear == 0.63)
         assert(value.gloveColorOverride.r == 0.2)
+        assert(value.taskAutomationEnabled == true and value.taskAutomationPaused == nil)
         assert(value.unknown == nil)
         assert(value.teleportBehind == nil, "Ephemeral settings must be omitted from config writes")
         return "encoded"
@@ -88,6 +90,7 @@ local loaded = config:load({
     shotTargetMode = "radius",
     teleportBehind = false,
     skinOverrides = {},
+    taskAutomationEnabled = false,
 })
 assert(loaded.fov == 320 and loaded.fullScreenAim == true and loaded.silentAim == true)
 assert(loaded.cameraFov == 320 and loaded.shotFov == 320)
@@ -100,6 +103,7 @@ assert(loaded.skinOverrides["T Knife"].weapon == "Karambit")
 assert(loaded.gloveOverride.weapon == "Driver Gloves")
 assert(loaded.gloveOverride.wear == 0.63)
 assert(loaded.gloveColorOverride.b == 0.7)
+assert(loaded.taskAutomationEnabled == true, "Legacy pause=false must migrate to enabled=true")
 assert(loaded.unknown == nil, "Per-game config must ignore unknown top-level settings")
 assert(loaded.teleportBehind == false, "Old configs must not restore ephemeral Rage settings")
 
@@ -107,6 +111,28 @@ loaded.teleportBehind = true
 loaded.worldRenderer = "native"
 config:save(loaded)
 assert(writes["universal-hub/configs/counterblox.json"] == "encoded")
+
+local function loadTaskAutomation(saved)
+    return Config.new({
+        decode = function()
+            return saved
+        end,
+        isFile = function()
+            return true
+        end,
+        path = "task.json",
+        readFile = function()
+            return "saved"
+        end,
+    }):load({ taskAutomationEnabled = false }).taskAutomationEnabled
+end
+assert(loadTaskAutomation({ taskAutomationPaused = true }) == false)
+assert(loadTaskAutomation({ taskAutomationPaused = false }) == true)
+assert(
+    loadTaskAutomation({ taskAutomationEnabled = false, taskAutomationPaused = false }) == false,
+    "The positive task setting must win when both schemas are present"
+)
+assert(loadTaskAutomation({ taskAutomationPaused = "false" }) == false)
 
 local prettyWrites = {}
 local prettyConfig = Config.new({

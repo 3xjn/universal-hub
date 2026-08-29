@@ -10,6 +10,10 @@ local HEAD_RAY_HIT_NAMES = {
     PhysicalHitboxHead = true,
 }
 
+local function smoothingSpeed(smoothness)
+    return 5 + 20 * (1 - smoothness / 100)
+end
+
 local function observationKey(observation)
     return observation and (observation.character or observation.player or observation.part) or nil
 end
@@ -65,6 +69,39 @@ function Targeting.selectObservation(observations, currentKey, nearest)
 
     local selected = nearest(observations or {})
     return selected, observationKey(selected)
+end
+
+function Targeting.taskPriority(observations, classify)
+    local visible = {}
+    for _, observation in ipairs(observations or {}) do
+        if observation.visible == true then
+            table.insert(visible, observation)
+        end
+    end
+    local eligible = #visible > 0 and visible or observations or {}
+    local aware = {}
+    local afk = {}
+    local finishableAfk = {}
+    for _, observation in ipairs(eligible) do
+        local facing, stationary, finishable = classify(observation)
+        if facing then
+            table.insert(aware, observation)
+        end
+        if stationary then
+            table.insert(afk, observation)
+            if finishable then
+                table.insert(finishableAfk, observation)
+            end
+        end
+    end
+    if #finishableAfk > 0 then
+        return finishableAfk
+    elseif #aware > 0 then
+        return aware
+    elseif #afk > 0 then
+        return afk
+    end
+    return eligible
 end
 
 function Targeting.visibleHeadPoint(observation, origin, raycast)
@@ -227,44 +264,31 @@ function Targeting.smoothRotation(current, target, smoothness, deltaTime)
         return target
     end
 
-    local speed = math.max(1.5, 30 * (1 - smoothness / 100))
+    local speed = smoothingSpeed(smoothness)
     local alpha = 1 - math.exp(-speed * math.max(deltaTime or 1 / 60, 0))
     local yawDelta = (target.Y - current.Y + math.pi) % (math.pi * 2) - math.pi
     return Vector2.new(current.X + (target.X - current.X) * alpha, current.Y + yawDelta * alpha)
 end
 
-function Targeting.humanRotation(current, target, smoothness, deltaTime, state)
+function Targeting.humanRotation(current, target, smoothness, deltaTime, strength)
     if not current then
         return target
     end
 
-    state = state or {}
-    local stepTime = math.max(deltaTime or 1 / 60, 1 / 240)
+    local stepTime = math.clamp(deltaTime or 1 / 60, 0, 1 / 30)
     local smooth = math.clamp(smoothness or 0, 0, 100)
+    local strengthRatio = math.clamp(strength or 60, 0, 100) / 100
+    local strengthScale = strengthRatio * strengthRatio
+    if strengthScale <= 0 then
+        return current
+    end
     local yawError = (target.Y - current.Y + math.pi) % (math.pi * 2) - math.pi
     local error = Vector2.new(target.X - current.X, yawError)
-    local targetMotion = Vector2.zero
-    if state.lastTarget then
-        targetMotion = Vector2.new(
-            target.X - state.lastTarget.X,
-            (target.Y - state.lastTarget.Y + math.pi) % (math.pi * 2) - math.pi
-        )
-    end
-    state.lastTarget = target
-
-    local targetSpeed = targetMotion.Magnitude / stepTime
-    local baseSpeed = math.max(1.5, 30 * (1 - smooth / 100))
-    local trackingSpeed = baseSpeed + math.min(targetSpeed * 0.8, 24)
-    local alpha = 1 - math.exp(-trackingSpeed * stepTime)
-    local curve = Vector2.zero
-    if error.Magnitude > 1e-6 then
-        local curveMagnitude = math.min(error.Magnitude * 0.08, math.rad(0.35))
-        local curveSign = state.curveSign or 1
-        curve = Vector2.new(-error.Y, error.X).Unit * curveMagnitude * curveSign
-    end
-
-    local step = error * alpha + targetMotion * 0.55 + curve * alpha
-    local maximumStep = error.Magnitude * 0.85
+    local response = (3 + 3 * (1 - smooth / 100)) * strengthScale
+    local step = error * (1 - math.exp(-response * stepTime))
+    local maximumStep = math.rad(6 + 6 * (1 - smooth / 100))
+        * strengthScale
+        * stepTime
     if step.Magnitude > maximumStep and maximumStep > 0 then
         step = step.Unit * maximumStep
     end

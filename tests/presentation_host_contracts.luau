@@ -85,59 +85,56 @@ for id, definition in pairs({
     }) do
         assert(
             not presentationSource:find(forbidden, 1, true),
-            definition.presentation .. " must not access presentation runtime internals: " .. forbidden
+            definition.presentation
+                .. " must not access presentation runtime internals: "
+                .. forbidden
         )
     end
 end
 
-assertSequence(
-    mount(expectedPresentations.rivals, RivalsDefinition.features.capabilities),
-    {
-        "aim",
-        "rate:aimSmoothness:Aim Smoothness",
-        "rate:headshotRate:Headshot Rate",
-        "rate:missRate:Miss Rate",
-        "segmented:Visuals",
-        "segmented:Combat",
-        "section:Combat:trigger:Trigger Bot:64",
-        "option:trigger:1:triggerBot:Trigger Bot",
-        "slider:trigger:triggerDelay:Delay",
-        "option:trigger:2:rapidFire:Rapid Fire",
-        "slider:trigger:fireRate:Fire Rate",
-        "option:trigger:3:quickReload:Quick Reload",
-        "option:trigger:4:meleeReach:Melee Reach",
-        "slider:trigger:meleeReachScale:Reach",
-        "option:trigger:5:skipDeflect:Katana Stop",
-        "option:trigger:5:autoDeflect:Auto Katana",
-        "option:trigger:6:alwaysScoped:Always Scoped",
-        "section:Rage:rage:RAGE:70",
-        "option:rage:1:teleportBehind:Warp",
-        "section:Movement:movement:MOVEMENT:70",
-        "option:movement:1:bhop:Bunny Hop",
-        "option:movement:2:infiniteJump:Infinite Jump",
-        "option:movement:3:wallNoclip:Wall Noclip",
-        "option:movement:4:redLightSafety:Red Light Safety",
-        "section:Settings:taskFarming:TASK FARMING:70",
-        "option:taskFarming:1:taskAutomationPaused:Pause Task Farming",
-        "section:Tools:world:WORLD:70",
-        "option:world:1:autoPickup:Auto Pickup",
-        "section:Visuals:visuals:VISUALS:70:1",
-        "option:visuals:1:boxes:Hitboxes",
-        "option:visuals:1:chams:Chams",
-        "option:visuals:2:chamsExcludeAccessories:Ignore Accessories:chams",
-        "option:visuals:2:chamsPerPart:Part Highlights:chams",
-        "option:visuals:3:names:Names",
-        "option:visuals:3:health:Health",
-        "option:visuals:4:weapon:Weapons",
-        "option:visuals:20:showEnemies:Enemies:audience",
-        "option:visuals:21:showTeammates:Allies:audience",
-        "option:visuals:4:noFlash:No Flash",
-        "option:visuals:5:noSmoke:No Smoke",
-        "option:visuals:6:utilityEsp:Utility ESP",
-        "cosmetics",
-    },
-    "RIVALS presentation"
-)
+assertSequence(mount(expectedPresentations.rivals, RivalsDefinition.features.capabilities), {
+    "aim",
+    "rate:aimSmoothness:Aim Smoothness",
+    "rate:headshotRate:Headshot Rate",
+    "rate:missRate:Miss Rate",
+    "segmented:Visuals",
+    "segmented:Combat",
+    "section:Combat:trigger:Trigger Bot:64",
+    "option:trigger:1:triggerBot:Trigger Bot",
+    "slider:trigger:triggerDelay:Delay",
+    "option:trigger:3:quickReload:Quick Reload",
+    "option:trigger:4:skipDeflect:Katana Stop",
+    "option:trigger:4:autoDeflect:Auto Katana",
+    "option:trigger:5:alwaysScoped:Always Scoped",
+    "section:Rage:rage:RAGE:70",
+    "option:rage:1:teleportBehind:Warp",
+    "option:rage:2:rapidFire:Rapid Fire",
+    "slider:rage:fireRate:Fire Rate",
+    "section:Movement:movement:MOVEMENT:70",
+    "option:movement:1:bhop:Bunny Hop",
+    "option:movement:2:infiniteJump:Infinite Jump",
+    "option:movement:3:wallNoclip:Wall Noclip",
+    "option:movement:4:redLightSafety:Red Light Safety",
+    "section:Tools:taskFarming:TASK FARMING:70",
+    "option:taskFarming:1:taskAutomationEnabled:Task Farming",
+    "section:Tools:world:WORLD:70",
+    "option:world:1:autoPickup:Auto Pickup",
+    "section:Visuals:visuals:VISUALS:70:1",
+    "option:visuals:1:boxes:Hitboxes",
+    "option:visuals:1:chams:Chams",
+    "option:visuals:2:chamsExcludeAccessories:Ignore Accessories:chams",
+    "option:visuals:2:chamsPerPart:Part Highlights:chams",
+    "option:visuals:3:names:Names",
+    "option:visuals:3:health:Health",
+    "option:visuals:4:weapon:Weapons",
+    "option:visuals:20:showEnemies:Enemies:audience",
+    "option:visuals:21:showTeammates:Allies:audience",
+    "option:visuals:4:noFlash:No Flash",
+    "option:visuals:5:noSmoke:No Smoke",
+    "option:visuals:6:unlockAllSkins:Unlock All Cosmetics",
+    "option:visuals:7:utilityEsp:Utility ESP",
+    "cosmetics",
+}, "RIVALS presentation")
 
 assertSequence(
     mount(expectedPresentations.counterblox, CounterbloxDefinition.features.capabilities),
@@ -391,19 +388,15 @@ for _ = 1, 2 do
     runtime:destroy()
     runtime:destroy()
 end
-assertSequence(
-    lifecycle,
-    {
-        "layout",
-        "render",
-        "visible",
-        "destroy",
-        "layout",
-        "render",
-        "visible",
-        "destroy",
-    },
-    "Minimal presentation lifecycle"
-)
+assertSequence(lifecycle, {
+    "layout",
+    "render",
+    "visible",
+    "destroy",
+    "layout",
+    "render",
+    "visible",
+    "destroy",
+}, "Minimal presentation lifecycle")
 
 print("presentation-host-contracts-ok")

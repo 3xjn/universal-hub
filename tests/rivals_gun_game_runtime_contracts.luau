@@ -107,7 +107,7 @@ runtime:update()
 assert(#touches == 0, "non-Gun-Game native state must do zero pickup work")
 nativeGunGame = true
 runtime:update()
-assert(#touches == 2 and touches[1].toggle == 1 and touches[2].toggle == 0)
+assert(#touches == 2 and touches[1].toggle == 0 and touches[2].toggle == 1)
 runtime:update()
 assert(#touches == 2, "pickup attempts must be throttled")
 assert(getChildrenCalls == 1, "enabled updates must use the maintained registry")
@@ -119,11 +119,35 @@ now += 1
 runtime:update()
 assert(#touches == 6, "ChildAdded pickups must join the registry")
 
+local lateMarker
+local lateMarkerAdded = signal()
+local lateDrop = {
+    Name = "_drop",
+    Parent = workspace,
+    ChildAdded = lateMarkerAdded,
+    FindFirstChild = function(_self, name)
+        return name == lateMarker and {} or nil
+    end,
+    IsA = function(_self, name)
+        return name == "BasePart"
+    end,
+}
+childAdded:Fire(lateDrop)
+assert(lateMarkerAdded:count() == 1, "an incomplete drop must wait for its marker")
+lateMarker = "Health"
+lateMarkerAdded:Fire({ Name = "Health" })
+assert(lateMarkerAdded:count() == 0, "classification must release the per-drop listener")
+now += 0.1
+runtime:update()
+assert(#touches == 8, "a marker replicated after its parent must still classify the drop")
+
 addedDrop.Parent = nil
+lateDrop.Parent = nil
 childRemoved:Fire(addedDrop)
+childRemoved:Fire(lateDrop)
 now += 1
 runtime:update()
-assert(#touches == 8, "ChildRemoved pickups must leave the registry")
+assert(#touches == 10, "ChildRemoved pickups must leave the registry")
 
 assert(childAdded:count() == 1 and childRemoved:count() == 1)
 runtime:stop()
@@ -136,6 +160,6 @@ afterStop.Parent = workspace
 childAdded:Fire(afterStop)
 now += 1
 runtime:update()
-assert(#touches == 8, "stopped runtime must remain inert")
+assert(#touches == 10, "stopped runtime must remain inert")
 
 print("rivals-gun-game-runtime-contracts-ok")

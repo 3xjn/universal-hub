@@ -126,4 +126,71 @@ lazy:refreshHook()
 assert(restoreCalls == 1, "disabling Shot Aim must restore its camera-data hook")
 lazy:stop()
 
+local observedCameraData = 0
+local originalCameraDataCalls = 0
+local observeEnabled = true
+local observedHook
+local observedRestoreCalls = 0
+local observedFighter = {}
+local observedController
+local observedOptions
+local originalCameraRotation
+local originalCameraLook
+local observedTarget = function()
+    originalCameraDataCalls += 1
+    originalCameraRotation = observedController.Rotation
+    originalCameraLook = observedOptions.workspace.CurrentCamera.CFrame.LookVector
+    return "camera-data"
+end
+observedFighter.GetCameraData = observedTarget
+observedOptions, observedController = options()
+observedOptions.getFighter = function()
+    return observedFighter
+end
+observedOptions.isEnabled = function()
+    return false
+end
+observedOptions.shouldObserve = function()
+    return observeEnabled
+end
+observedOptions.onCameraData = function()
+    observedCameraData += 1
+end
+observedOptions.hookFunction = function(target, replacement)
+    assert(target == observedTarget)
+    observedHook = replacement
+    return target
+end
+observedOptions.restoreFunction = function(target)
+    assert(target == observedTarget)
+    observedRestoreCalls += 1
+end
+local observed = loadCopy("ShotPresentation.observed").new(observedOptions)
+observed:refreshHook()
+assert(observedHook, "Camera Aim rates must observe the native camera-data shot seam")
+assert(observedHook(observedFighter) == "camera-data")
+assert(
+    originalCameraDataCalls == 1 and observedCameraData == 1,
+    "A Camera Aim shot must advance its rate plan without masking the visible camera"
+)
+local flickRotation = Vector2.new(0.25, -0.5)
+assert(observed:stageFlick(flickRotation))
+assert(observedHook(observedFighter) == "camera-data")
+local expectedFlickFrame = CFrame.new(observedOptions.workspace.CurrentCamera.CFrame.Position)
+    * CFrame.Angles(0, flickRotation.Y, 0)
+    * CFrame.Angles(flickRotation.X, 0, 0)
+assert(
+    originalCameraRotation == flickRotation
+        and (originalCameraLook - expectedFlickFrame.LookVector).Magnitude < 1e-6
+        and (
+            observedOptions.workspace.CurrentCamera.CFrame.LookVector
+            - expectedFlickFrame.LookVector
+        ).Magnitude < 1e-6,
+    "Flick Projectiles must commit its visible rotation before native camera data is captured"
+)
+observeEnabled = false
+observed:refreshHook()
+assert(observedRestoreCalls == 1, "disabling shot observation must restore the camera-data hook")
+observed:stop()
+
 print("shot-presentation-binding-contracts-ok")

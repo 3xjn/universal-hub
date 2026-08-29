@@ -35,5 +35,15 @@ now = 1.5
 assert(c:update(rifle) == true, "counter release should resist one-frame equipped-item noise")
 now = 2.3
 assert(c:update(rifle) == false, "returning to an offensive weapon must release Spray counterplay")
+now = 3
+assert(c:update(katana, "target-a") == false)
+now = 4.3
+assert(c:update(katana, "target-a") == true)
+assert(
+    c:update(katana, "target-b") == false,
+    "counter commitment must debounce again when task targeting changes opponents"
+)
+c:reset()
+assert(c.active == false and c.targetKey == nil, "counter reset must clear engagement state")
 
 print("rivals-task-counter-policy-contracts-ok")
