@@ -1,5 +1,5 @@
 return {
-    buildId = [[3c872aab]],
+    buildId = [[610c86b0]],
     id = [[stealanegg]],
     sources = {
         ["games/stealanegg/Adapter.lua"] = [[local function importDependency(path, relativePath)

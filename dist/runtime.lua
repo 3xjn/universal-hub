@@ -1,4 +1,4 @@
-local buildId = [[3c872aab]]
+local buildId = [[610c86b0]]
 local shared = {
     ["changelog.json"] = [[{
   "current": "0.3.0",
@@ -2472,9 +2472,10 @@ return Counterblox
 ]],
     ["games/rivals/Definition.lua"] = [[return {
     defaults = {
+        aimAssistStrength = 60,
         autoCounter = false,
         redLightSafety = false,
-        taskAutomationPaused = true,
+        taskAutomationEnabled = false,
         taskAutomationEmergencyKey = "End",
         infiniteJump = false,
         wallNoclip = false,
@@ -2483,9 +2484,13 @@ return Counterblox
         autoDeflect = false,
         rapidFire = false,
         fireRate = 200,
+        flickProjectiles = false,
         quickReload = false,
         meleeReach = false,
         meleeReachScale = 200,
+        unlockAllSkins = false,
+        unlockAllSkinsRestore = {},
+        unlockAllCosmeticsEquipped = {},
         triggerDelay = 0,
     },
     features = {
@@ -2497,6 +2502,7 @@ return Counterblox
             "triggerDelay",
             "rapidFire",
             "fireRate",
+            "flickProjectiles",
             "quickReload",
             "meleeReach",
             "meleeReachScale",
@@ -2512,6 +2518,7 @@ return Counterblox
             "wallNoclip",
             "teleportBehind",
             "aimSmoothness",
+            "aimAssistStrength",
             "headshotRate",
             "missRate",
             "boxes",
@@ -2527,7 +2534,8 @@ return Counterblox
             "utilityEsp",
             "noFlash",
             "noSmoke",
-            "taskAutomationPaused",
+            "unlockAllSkins",
+            "taskAutomationEnabled",
             "taskAutomationEmergencyKey",
         },
         cosmetics = false,
@@ -2536,13 +2544,14 @@ return Counterblox
             silentAim = { "shotAim" },
         },
         optionLabels = {
-            humanAim = "Human Aim",
-            alwaysScoped = "No Scope",
+            humanAim = "Aim Assist",
+            alwaysScoped = "Always Scoped",
             skipDeflect = "Katana Stop",
             autoDeflect = "Auto Katana",
             triggerDelay = "Delay",
             rapidFire = "Rapid Fire",
             fireRate = "Fire Rate",
+            flickProjectiles = "Flick Projectiles",
             quickReload = "Quick Reload",
             meleeReach = "Melee Reach",
             meleeReachScale = "Reach",
@@ -2551,7 +2560,7 @@ return Counterblox
             teleportBehind = "Warp",
             silentAim = "Camera Aim",
             shotAim = "Silent Aim",
-            taskAutomationPaused = "Pause Task Farming",
+            taskAutomationEnabled = "Task Farming",
             taskAutomationEmergencyKey = "Emergency Stop",
         },
     },
@@ -2584,6 +2593,7 @@ return Counterblox
         "games/rivals/features/AutoCounter",
         "games/rivals/features/NoScope",
         "games/rivals/features/Pickup",
+        "games/rivals/features/SkinUnlock",
         "games/rivals/features/RedLightSafety",
         "games/rivals/features/ScopedAccuracy",
         "games/rivals/features/AutoCounterRuntime",
@@ -3181,11 +3191,29 @@ if not hasPersistedConfig then
         end
     end
 end
+local taskAutomationWasNormalized = configuration.TeleportBootstrap ~= true
+    and settings.taskAutomationEnabled == true
+if taskAutomationWasNormalized then
+    settings.taskAutomationEnabled = false
+end
 
 local session
 local overlay
 local adapter
 local store
+local pendingAdapterOptions = {}
+local function setAdapterOption(name, enabled, persist)
+    if session then
+        session:setOption(name, enabled, persist)
+        return true
+    end
+    table.insert(pendingAdapterOptions, {
+        name = name,
+        enabled = enabled,
+        persist = persist,
+    })
+    return false
+end
 local function noAfterAdapter(_adapter) end
 local composition = {
     adapter = {},
@@ -3267,7 +3295,7 @@ end
 local initialState = copyData(adapterDefinition.initialState)
 initialState.settings = settings
 initialState.status = ("Loading %s"):format(adapterDefinition.label)
-if settings.taskAutomationPaused == false then
+if settings.taskAutomationEnabled == true then
     initialState.menuVisible = false
 end
 store = Store.new(initialState)
@@ -3599,6 +3627,7 @@ local adapterContext = {
     placeId = game.PlaceId,
     players = Players,
     store = store,
+    setOption = setAdapterOption,
     teleportBootstrap = configuration.TeleportBootstrap == true,
     wait = task.wait,
     workspace = Workspace,
@@ -3638,6 +3667,13 @@ if not sessionCreated then
     failStartup(sessionResult)
 end
 session = sessionResult
+for _, request in ipairs(pendingAdapterOptions) do
+    session:setOption(request.name, request.enabled, request.persist)
+end
+table.clear(pendingAdapterOptions)
+if taskAutomationWasNormalized then
+    session:setOption("taskAutomationEnabled", false, true)
+end
 overlay.menu:setEnabled(true)
 table.clear(startupCleanups)
 local finalized, finalError = pcall(function()
@@ -4361,6 +4397,13 @@ function Config:load(defaults)
     local success, decoded = pcall(self.decode, self.readFile(self.path))
     if success then
         if type(decoded) == "table" then
+            if
+                decoded.taskAutomationEnabled == nil
+                and type(decoded.taskAutomationPaused) == "boolean"
+            then
+                decoded.taskAutomationEnabled = not decoded.taskAutomationPaused
+            end
+            decoded.taskAutomationPaused = nil
             if decoded.cameraFov == nil then
                 decoded.cameraFov = decoded.fov
             end
@@ -5045,7 +5088,10 @@ end
 
 function Session:setRate(name, value, persist)
     assert(
-        name == "aimSmoothness" or name == "headshotRate" or name == "missRate",
+        name == "aimSmoothness"
+            or name == "aimAssistStrength"
+            or name == "headshotRate"
+            or name == "missRate",
         "Unknown hub rate: " .. tostring(name)
     )
     self:patchSettings({
@@ -9070,6 +9116,7 @@ function Catalog:aim()
         or self.available.shotAim
         or self.available.triggerBot
         or self.available.aimSmoothness
+        or self.available.aimAssistStrength
         or self.available.headshotRate
         or self.available.missRate
     if self.hasAim or not supported then
@@ -9326,12 +9373,20 @@ function Catalog:model(state)
             },
         }
         for _, related in ipairs(segment.related or {}) do
-            if related.when == selected and self.available[related.id] then
+            local kind = related.kind or "toggle"
+            local parentActive = not related.parent or settings[related.parent] == true
+            if related.when == selected and self.available[related.id] and parentActive then
+                local value = settings[related.id]
                 append(controls, {
                     id = related.id,
-                    kind = related.kind or "toggle",
+                    kind = kind,
                     label = related.label,
-                    value = settings[related.id] == true,
+                    max = kind == "slider" and (related.max or 100) or nil,
+                    min = kind == "slider" and (related.min or 0) or nil,
+                    parent = related.parent,
+                    step = kind == "slider" and (related.step or 1) or nil,
+                    unit = kind == "slider" and related.unit or nil,
+                    value = kind == "slider" and value or value == true,
                     status = self.optionSupport[related.id] == false and "unavailable"
                         or "available",
                 })
@@ -9411,11 +9466,11 @@ function Catalog:model(state)
 
     for _, group in ipairs(self.groups) do
         if
-            group.renderEmpty
-            or #group.actions > 0
+            #group.actions > 0
             or #group.options > 0
             or #group.keybinds > 0
             or #group.sliders > 0
+            or group.renderEmpty
         then
             local controls = {}
             for _, action in ipairs(group.actions) do
@@ -9875,7 +9930,11 @@ function Catalog:model(state)
                         for _, related in ipairs(segment.related or {}) do
                             local retained = self.relatedValues[related.id]
                             if related.when == value and retained ~= nil then
-                                self.context.setOption(related.id, retained, shouldPersist)
+                                if type(retained) == "boolean" then
+                                    self.context.setOption(related.id, retained, shouldPersist)
+                                else
+                                    self.context.setRate(related.id, retained, shouldPersist)
+                                end
                             end
                         end
                         if id == "aimMode" then
@@ -11149,6 +11208,7 @@ function StandardPanels.new(bridge, available)
         or available.shotAim == true
         or available.triggerBot == true
         or available.aimSmoothness == true
+        or available.aimAssistStrength == true
         or available.headshotRate == true
         or available.missRate == true
     return setmetatable({
