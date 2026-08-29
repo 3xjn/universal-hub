@@ -2,7 +2,6 @@ local TriggerBot = {}
 
 -- Fallback only. Live fire uses the equipped weapon's native cooldown.
 TriggerBot.INTERVAL = 0
-TriggerBot.RADIUS = 8
 
 function TriggerBot.weaponReady(item, now)
     if type(now) ~= "number" then
@@ -181,24 +180,6 @@ function TriggerBot.pathReady(target, item, ctx)
         or policyFlag(WeaponPolicy, "isRicochetWeapon", item)
         or policyFlag(WeaponPolicy, "isBouncingProjectile", item)
     if usesArc then
-        if
-            type(ProjectileAim.isDirectProjectile) == "function"
-            and ProjectileAim.isDirectProjectile(item)
-            and type(ProjectileAim.solveProjectileAim) == "function"
-        then
-            local origin = cameraOrigin(ctx)
-            local solution = origin
-                and ProjectileAim.solveProjectileAim(
-                    origin,
-                    target,
-                    item and item.Info,
-                    ctx.gravity
-                )
-            if solution then
-                target.projectileAim = solution
-                return true
-            end
-        end
         return false
     end
     return TriggerBot.hitscanReady(target, cameraOrigin(ctx), ctx.raycast, ctx.targeting)
@@ -228,7 +209,14 @@ function TriggerBot.update(session, ctx)
     local WeaponPolicy = ctx.weaponPolicy
     local ProjectileAim = ctx.projectileAim
     local interval = ctx.interval or TriggerBot.INTERVAL
-    local radius = ctx.radius or TriggerBot.RADIUS
+    local manualAimHeld = type(ctx.isAimInputHeld) == "function" and ctx.isAimInputHeld() == true
+    if manualAimHeld and state.held then
+        if type(ctx.disownAim) == "function" then
+            ctx.disownAim()
+        end
+        state.held = false
+        state.heldItem = nil
+    end
     if taskDebug then
         taskDebug.triggerStage = "entered"
         taskDebug.triggerAt = ctx.clock()
@@ -275,27 +263,21 @@ function TriggerBot.update(session, ctx)
         end
         return
     end
-    local gunblade = WeaponPolicy.isDualModeBlade(item)
-    if not gunblade and alignedTarget and alignedTarget.aimSettled == false then
-        local humanReticleReady = settings.humanAim
-            and (alignedTarget.screenDistance or math.huge) <= radius
-            and not alignedTarget.ricochet
-            and not alignedTarget.slingshot
-            and not alignedTarget.splashImpact
-            and not alignedTarget.projectileAim
-        if not humanReticleReady then
-            if taskDebug then
-                taskDebug.triggerStage = "aim-settling"
-            end
-            if state.fireHeld then
-                return
-            end
-            TriggerBot.delayLost(state, ctx.clock())
-            ctx.releaseFire()
-            return
+    local itemData = item.Data
+    local ammo = WeaponPolicy.ammo(item)
+    if ammo == 0 or type(itemData) == "table" and itemData.IsReloading == true then
+        if taskDebug then
+            taskDebug.triggerStage = ammo == 0 and "empty" or "reloading"
         end
+        ctx.releaseFire()
+        if state.held then
+            ctx.aimRelease()
+            state.held = false
+            state.heldItem = nil
+        end
+        return
     end
-
+    local gunblade = WeaponPolicy.isDualModeBlade(item)
     local target
     if gunblade then
         if settings.shotAim then
@@ -305,8 +287,14 @@ function TriggerBot.update(session, ctx)
         end
     else
         target = alignedTarget
-        if not target and not settings.shotAim then
-            target = ctx.selectTarget(nil, true, true)
+        if target and target.aimSettled == false then
+            ctx.releaseFire()
+            if taskDebug then
+                taskDebug.triggerStage = "aim-settling"
+            end
+            return
+        elseif not target and not settings.shotAim then
+            target = ctx.selectCrosshairTarget()
         end
     end
     if TriggerBot.shouldHoldForDeflect(target, item, ctx) then
@@ -330,11 +318,16 @@ function TriggerBot.update(session, ctx)
         if taskDebug then
             taskDebug.triggerStage = not target and "no-target" or "path-blocked"
         end
-        if state.fireHeld and target then
-            return
+        local now = ctx.clock()
+        TriggerBot.delayLost(state, now)
+        if state.fireHeld then
+            state.fireLostAt = state.fireLostAt or now
+            if now - state.fireLostAt <= TriggerBot.TARGET_GRACE_SECONDS then
+                return
+            end
         end
+        state.fireLostAt = nil
         state.gunblade = nil
-        TriggerBot.delayLost(state, ctx.clock())
         ctx.releaseFire()
         if state.held then
             ctx.aimRelease()
@@ -344,6 +337,7 @@ function TriggerBot.update(session, ctx)
         end
         return
     end
+    state.fireLostAt = nil
 
     if gunblade then
         ctx.releaseFire()
@@ -501,6 +495,12 @@ function TriggerBot.update(session, ctx)
     end
     if WeaponPolicy.isChargedBow(item) then
         ctx.releaseFire()
+        if manualAimHeld then
+            if taskDebug then
+                taskDebug.triggerStage = "manual-aim"
+            end
+            return
+        end
         if not state.held then
             if not TriggerBot.hubReady(state, ctx.clock()) then
                 return
@@ -550,19 +550,20 @@ function TriggerBot.update(session, ctx)
             return
         end
         if state.fireHeld and state.fireItem == item then
-            local fireClock = type(ctx.itemClock) == "function" and ctx.itemClock() or ctx.clock()
-            if not TriggerBot.holdDropped(item, fireClock, 0) then
-                if taskDebug then
-                    taskDebug.triggerStage = "holding-fire"
+            if WeaponPolicy.repeatShootingInput(item) then
+                ctx.press()
+            else
+                local fireClock = type(ctx.itemClock) == "function" and ctx.itemClock()
+                    or ctx.clock()
+                if TriggerBot.holdDropped(item, fireClock, 0) then
+                    ctx.releaseFire()
+                    state.fireHeld = true
+                    state.fireItem = item
+                    ctx.press()
                 end
-                return
             end
-            ctx.releaseFire()
-            state.fireHeld = true
-            state.fireItem = item
-            ctx.press()
             if taskDebug then
-                taskDebug.triggerStage = "repressed-fire"
+                taskDebug.triggerStage = "holding-fire"
             end
             return
         end

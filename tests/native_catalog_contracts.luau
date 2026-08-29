@@ -6,6 +6,7 @@ local Catalog = require("../ui/presentation/Catalog")
 local Presentation = require("../games/rivals/Presentation")
 
 local settings = {
+    aimAssistStrength = 60,
     aimSmoothness = 0,
     headshotRate = 100,
     missRate = 0,
@@ -16,15 +17,20 @@ local settings = {
     alwaysScoped = false,
     skipDeflect = false,
     autoDeflect = false,
+    rapidFire = false,
+    fireRate = 200,
+    flickProjectiles = false,
     triggerDelay = 0,
     cameraFov = 58,
     cameraFullScreenAim = false,
+    cameraTargetMode = "radius",
     fov = 58,
     minimumFov = 40,
     maximumFov = 500,
     fullScreenAim = false,
     shotFov = 96,
     shotFullScreenAim = true,
+    shotTargetMode = "fullscreen",
     teleportBehind = false,
     boxes = true,
     chams = true,
@@ -61,13 +67,18 @@ local catalog = Catalog.new({
     capabilities = {
         "silentAim",
         "shotAim",
+        "target360",
         "humanAim",
         "triggerBot",
         "triggerDelay",
+        "rapidFire",
+        "fireRate",
+        "flickProjectiles",
         "skipDeflect",
         "autoDeflect",
         "alwaysScoped",
         "aimSmoothness",
+        "aimAssistStrength",
         "headshotRate",
         "missRate",
         "boxes",
@@ -95,7 +106,10 @@ local catalog = Catalog.new({
         end
         table.insert(writes, { id, value, persist })
     end,
-    setRate = function() end,
+    setRate = function(id, value, persist)
+        settings[id] = value
+        table.insert(writes, { id, value, persist })
+    end,
     setFov = function(value)
         settings[settings.shotAim and "shotFov" or "cameraFov"] = value
     end,
@@ -109,25 +123,31 @@ local catalog = Catalog.new({
 Presentation.mount(catalog)
 local ephemeralSettings = Catalog.collectEphemeralSettings(Presentation)
 assert(ephemeralSettings.teleportBehind == true, "Rage settings must be inferred as ephemeral")
+assert(ephemeralSettings.rapidFire == true and ephemeralSettings.fireRate == true)
 assert(ephemeralSettings.triggerBot == nil, "Non-Rage settings must remain persistent")
 local model = catalog:model(state)
 local combat = model.pages[1]
 assert(combat.id == "Combat")
-local expected = { "aimMode", "response", "targeting", "trigger" }
+local expected = { "aimMode", "targeting", "response", "trigger" }
 for index, id in ipairs(expected) do
     assert(combat.sections[index].id == id, "RIVALS Combat hierarchy changed at " .. index)
 end
 assert(combat.sections[1].controls[1].kind == "segmented")
 assert(combat.sections[1].controls[1].value == "off")
-assert(combat.sections[2].controls[1].emphasis == "row")
-assert(combat.sections[4].label == "Trigger Bot")
+local targetMode = combat.sections[2].controls[1]
+assert(targetMode.emphasis == "prominent" and targetMode.value == "radius")
+assert(#targetMode.options == 3 and targetMode.options[3].value == "360")
+assert(combat.sections[2].controls[2].id == "fov")
+assert(combat.sections[3].controls[1].emphasis == "row")
 local triggerIds = {}
 for _, control in ipairs(combat.sections[4].controls) do
     triggerIds[control.id] = control
 end
-assert(triggerIds.triggerBot and triggerIds.skipDeflect.label == "Katana Stop")
-assert(triggerIds.autoDeflect and triggerIds.autoDeflect.label == "Auto Katana")
+assert(triggerIds.rapidFire == nil, "Rapid Fire must not remain under Trigger Bot")
 assert(triggerIds.triggerDelay == nil, "Delay must wait until Trigger Bot is on")
+local rageControls = model.pages[2].sections[1].controls
+assert(rageControls[1].id == "teleportBehind" and rageControls[2].id == "rapidFire")
+assert(rageControls[2].label == "Rapid Fire")
 settings.triggerBot = true
 model = catalog:model(state)
 local triggerControls = model.pages[1].sections[4].controls
@@ -141,19 +161,39 @@ for _, control in ipairs(triggerControls) do
 end
 model.onValueChange("triggerDelay", 40, true)
 assert(settings.triggerDelay == 40)
+model.onValueChange("rapidFire", true, true)
+assert(writes[#writes][1] == "rapidFire" and writes[#writes][3] == false)
+model = catalog:model(state)
+rageControls = {}
+for _, control in ipairs(model.pages[2].sections[1].controls) do
+    rageControls[control.id] = control
+end
+assert(rageControls.fireRate and rageControls.fireRate.parent == "rapidFire")
+assert(rageControls.fireRate.min == 100 and rageControls.fireRate.max == 1000)
+assert(rageControls.fireRate.step == 5 and rageControls.fireRate.unit == "%")
+model.onValueChange("fireRate", 250, true)
+assert(settings.fireRate == 250 and writes[#writes][3] == false)
 
+local writeCount = #writes
 model.onValueChange("aimMode", "camera", true)
-assert(writes[1][1] == "shotAim" and writes[1][2] == false)
-assert(writes[2][1] == "silentAim" and writes[2][2] == true)
+assert(writes[writeCount + 1][1] == "shotAim" and writes[writeCount + 1][2] == false)
+assert(writes[writeCount + 2][1] == "silentAim" and writes[writeCount + 2][2] == true)
 model = catalog:model(state)
 assert(model.pages[1].sections[1].controls[1].value == "camera")
-assert(#model.pages[1].sections[1].controls == 2)
+assert(#model.pages[1].sections[1].controls == 3)
 assert(model.pages[1].sections[1].controls[2].id == "humanAim")
+assert(model.pages[1].sections[1].controls[3].id == "flickProjectiles")
+model.onValueChange("flickProjectiles", true, true)
+assert(settings.flickProjectiles == true)
 assert(model.pages[1].sections[4].id == "trigger")
-assert(model.pages[1].sections[3].controls[1].value == 58)
+assert(model.pages[1].sections[2].controls[2].value == 58)
 model.onValueChange("fov", 72, true)
-model.onValueChange("fullScreenAim", "fullscreen", true)
+model.onValueChange("fullScreenAim", "360", true)
 assert(settings.cameraFov == 72 and settings.cameraFullScreenAim == true)
+assert(settings.cameraTargetMode == "360")
+model = catalog:model(state)
+assert(#model.pages[1].sections[2].controls == 1)
+assert(model.pages[1].sections[2].controls[1].value == "360")
 
 model.onValueChange("humanAim", true, true)
 assert(settings.humanAim == true)
@@ -162,8 +202,8 @@ assert(settings.silentAim == false and settings.shotAim == true)
 assert(settings.humanAim == false)
 model = catalog:model(state)
 assert(model.pages[1].sections[1].controls[1].value == "silent")
-assert(model.pages[1].sections[3].controls[1].value == 96)
-assert(model.pages[1].sections[3].controls[1].disabled == true)
+assert(#model.pages[1].sections[2].controls == 1)
+assert(model.pages[1].sections[2].controls[1].value == "fullscreen")
 assert(#model.pages[1].sections == 4)
 assert(#model.pages[1].sections[1].controls == 1)
 assert(model.pages[1].sections[4].id == "trigger")
@@ -174,6 +214,13 @@ model = catalog:model(state)
 assert(model.pages[1].sections[1].controls[1].value == "camera")
 assert(model.pages[1].sections[1].controls[2].id == "humanAim")
 assert(model.pages[1].sections[1].controls[2].value == true)
+assert(model.pages[1].sections[1].controls[3].id == "aimAssistStrength")
+assert(model.pages[1].sections[1].controls[3].parent == "humanAim")
+assert(model.pages[1].sections[1].controls[3].value == 60)
+assert(model.pages[1].sections[1].controls[4].id == "flickProjectiles")
+model.onValueChange("aimAssistStrength", 85, true)
+assert(settings.aimAssistStrength == 85 and writes[#writes][3] == true)
+assert(model.pages[1].sections[2].controls[1].value == "360")
 
 local visuals
 for _, page in ipairs(model.pages) do

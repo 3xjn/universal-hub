@@ -71,6 +71,9 @@ function TaskFarmRuntime.new(options)
         onActivityChanged = options.onActivityChanged,
         onStatusChanged = options.onStatusChanged,
         onManualDuel = options.onManualDuel,
+        leaveRange = options.leaveRange,
+        rangeExitPending = false,
+        rangeExitRequested = false,
         practiceDriver = options.practiceDriver,
         lastCombatActive = false,
         queueAccepted = false,
@@ -131,6 +134,16 @@ function TaskFarmRuntime.new(options)
     if options.fighterController then
         connect(self.connections, options.fighterController.LocalFighterChanged, onNativeChange)
     end
+    connect(
+        self.connections,
+        changedSignal(options.matchmakingController, "MatchmadeGameOver"),
+        onNativeChange
+    )
+    connect(self.connections, options.matchmakingController.MatchmadeDuelEnded, onNativeChange)
+    if options.duelController then
+        connect(self.connections, options.duelController.DuelChanged, onNativeChange)
+        connect(self.connections, options.duelController.LocalDuelChanged, onNativeChange)
+    end
     self:_bindDuel()
     self:_reconcile(false)
     return self
@@ -170,44 +183,36 @@ function TaskFarmRuntime:_bindDuel()
 end
 
 function TaskFarmRuntime:_inDuel()
+    local value
     if type(self.context.isInDuel) == "function" then
-        return self.context.isInDuel() == true
+        value = self.context.isInDuel()
+    else
+        value = read(self:_fighter(), "IsInDuel")
     end
-    return read(self:_fighter(), "IsInDuel") == true
+    if type(value) == "boolean" then
+        return value
+    end
+    return nil
 end
 
 function TaskFarmRuntime:_inRange()
+    local value
     if type(self.context.isInRange) == "function" then
-        return self.context.isInRange() == true
+        value = self.context.isInRange()
+    else
+        value = read(self:_fighter(), "IsInShootingRange")
     end
-    return read(self:_fighter(), "IsInShootingRange") == true
+    if type(value) == "boolean" then
+        return value
+    end
+    return nil
 end
 
 function TaskFarmRuntime:_isMatchmadeDuel()
     if type(self.context.isMatchmadeDuel) == "function" then
         return self.context.isMatchmadeDuel(self:_duel()) == true
     end
-    if self.queueAccepted or self:_isQueued() then
-        return true
-    end
-    local controller = self.matchmakingController
-    if type(controller.Get) == "function" then
-        for _, key in ipairs({ "MatchmadeStatus", "MatchmadeGameOver", "MatchmadeConnectedPlayers" }) do
-            local ok, value = pcall(controller.Get, controller, key)
-            if ok and value ~= nil then
-                return true
-            end
-        end
-    end
-    if type(controller.IsMatchmadeDuelOver) == "function" then
-        local ok, value = pcall(controller.IsMatchmadeDuelOver, controller)
-        if ok and value == true then
-            return true
-        end
-    end
-    return read(controller, "MatchmadeStatus") ~= nil
-        or read(controller, "MatchmadeGameOver") ~= nil
-        or read(controller, "MatchmadeConnectedPlayers") ~= nil
+    return self.queueAccepted or self:_isQueued()
 end
 
 function TaskFarmRuntime:_isQueued()
@@ -391,9 +396,10 @@ function TaskFarmRuntime:_reconcile(isRetry)
         end
     end
     local inDuel = self:_inDuel()
+    local matchmadeDuel = self:_isMatchmadeDuel()
     -- Auto-pause only when entering a private/lobby duel. A later user resume,
     -- round-status change, or Adapter pause/resume sync must not re-pause.
-    if inDuel and not self:_isMatchmadeDuel() and not self.wasInDuel then
+    if inDuel and not matchmadeDuel and not self.wasInDuel then
         self.wasInDuel = true
         self:pause("manual-duel")
         if type(self.onManualDuel) == "function" then
@@ -401,11 +407,13 @@ function TaskFarmRuntime:_reconcile(isRetry)
         end
         return
     end
-    if self.wasInDuel and not inDuel then
+    if self.wasInDuel and inDuel == false then
         self.queueAccepted = false
         self.queuedTaskName = nil
     end
-    self.wasInDuel = inDuel
+    if inDuel ~= nil then
+        self.wasInDuel = inDuel
+    end
     local function finish(state)
         self.state = state
         self:_notifyActivity()
@@ -423,8 +431,21 @@ function TaskFarmRuntime:_reconcile(isRetry)
         finish(practiceStatus and practiceStatus.state or "practice-pending")
         return
     end
+    if inDuel == nil then
+        finish("native-waiting")
+        return
+    end
     local duelStatus = read(self:_duel(), "Status")
-    if inDuel and duelStatus == "GameOver" and self:_isMatchmadeDuel() then
+    if inDuel and matchmadeDuel and duelStatus == nil then
+        local isOver = self.matchmakingController.IsMatchmadeDuelOver
+        if type(isOver) == "function" then
+            local succeeded, result = pcall(isOver, self.matchmakingController)
+            if succeeded and result == true then
+                duelStatus = "GameOver"
+            end
+        end
+    end
+    if inDuel and duelStatus == "GameOver" and matchmadeDuel then
         if self:_isQueued() or (self.queueAccepted and self.queuedTaskName == currentTaskName) then
             finish("queued")
             return
@@ -437,10 +458,35 @@ function TaskFarmRuntime:_reconcile(isRetry)
         finish(self:isCombatActive() and "combat" or "duel-waiting")
         return
     end
-    if self:_inRange() then
-        finish("range-waiting")
+    local inRange = self:_inRange()
+    if inRange == nil then
+        finish("native-waiting")
         return
     end
+    if inRange then
+        if
+            not self.rangeExitPending
+            and not self.rangeExitRequested
+            and type(self.leaveRange) == "function"
+        then
+            self.rangeExitPending = true
+            local succeeded, accepted = pcall(self.leaveRange)
+            self.rangeExitPending = false
+            if self.generation ~= generation or self.stopped or self.paused then
+                if not self.stopped and not self.paused then
+                    self:_reconcile(false)
+                end
+                return
+            end
+            self.rangeExitRequested = succeeded and accepted ~= false
+        end
+        finish(
+            (self.rangeExitPending or self.rangeExitRequested) and "range-leaving"
+                or "range-waiting"
+        )
+        return
+    end
+    self.rangeExitRequested = false
     if self:_isQueued() or (self.queueAccepted and self.queuedTaskName == currentTaskName) then
         finish("queued")
         return
@@ -496,6 +542,7 @@ function TaskFarmRuntime:pause(reason)
     self.generation += 1
     self.paused = true
     self.pauseReason = reason or "paused"
+    self.rangeExitRequested = false
     self.state = "paused"
     self:_cancelOwnedQueue()
     if self.practiceDriver and type(self.practiceDriver.pause) == "function" then
@@ -520,6 +567,7 @@ function TaskFarmRuntime:stop()
     self.stopped = true
     self:_cancelRetries()
     self.generation += 1
+    self:_cancelOwnedQueue()
     self.state = "stopped"
     self.currentTask = nil
     if self.practiceDriver and type(self.practiceDriver.stop) == "function" then

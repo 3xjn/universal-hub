@@ -31,11 +31,25 @@ function TaskCounterPolicy.new(options)
         candidate = false,
         candidateAt = 0,
         active = false,
+        targetKey = nil,
     }, TaskCounterPolicy)
 end
 
-function TaskCounterPolicy:update(equippedItem)
+function TaskCounterPolicy:reset()
+    self.candidate = false
+    self.candidateAt = 0
+    self.active = false
+    self.targetKey = nil
+end
+
+function TaskCounterPolicy:update(equippedItem, targetKey)
     local now = self.clock()
+    if targetKey ~= self.targetKey then
+        self.candidate = false
+        self.candidateAt = now
+        self.active = false
+        self.targetKey = targetKey
+    end
     local candidate = TaskCounterPolicy.isDefensiveItem(equippedItem)
     if candidate ~= self.candidate then
         self.candidate = candidate

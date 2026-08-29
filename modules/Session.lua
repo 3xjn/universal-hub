@@ -81,7 +81,10 @@ end
 
 function Session:setRate(name, value, persist)
     assert(
-        name == "aimSmoothness" or name == "headshotRate" or name == "missRate",
+        name == "aimSmoothness"
+            or name == "aimAssistStrength"
+            or name == "headshotRate"
+            or name == "missRate",
         "Unknown hub rate: " .. tostring(name)
     )
     self:patchSettings({

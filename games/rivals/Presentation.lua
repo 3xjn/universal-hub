@@ -42,7 +42,24 @@ function Presentation.mount(host)
         label = "Aim Type",
         emphasis = "prominent",
         related = {
-            { id = "humanAim", kind = "toggle", label = "Human Aim", when = "camera" },
+            { id = "humanAim", kind = "toggle", label = "Aim Assist", when = "camera" },
+            {
+                id = "aimAssistStrength",
+                kind = "slider",
+                label = "Strength",
+                max = 100,
+                min = 0,
+                parent = "humanAim",
+                step = 1,
+                unit = "%",
+                when = "camera",
+            },
+            {
+                id = "flickProjectiles",
+                kind = "toggle",
+                label = "Flick Projectiles",
+                when = "camera",
+            },
         },
         options = {
             {
@@ -77,12 +94,23 @@ function Presentation.mount(host)
             parent = "triggerBot",
         })
     end
-    host:option("trigger", 2, "skipDeflect", "Katana Stop")
-    host:option("trigger", 2, "autoDeflect", "Auto Katana")
-    host:option("trigger", 3, "alwaysScoped", "Always Scoped")
+    host:option("trigger", 3, "quickReload", "Quick Reload")
+    host:option("trigger", 4, "skipDeflect", "Katana Stop")
+    host:option("trigger", 4, "autoDeflect", "Auto Katana")
+    host:option("trigger", 5, "alwaysScoped", "Always Scoped")
 
     host:section("Rage", "rage", "RAGE", 70)
     host:option("rage", 1, "teleportBehind", "Warp")
+    host:option("rage", 2, "rapidFire", "Rapid Fire")
+    if type(host.slider) == "function" then
+        host:slider("rage", "fireRate", "Fire Rate", {
+            min = 100,
+            max = 1000,
+            step = 5,
+            unit = "%",
+            parent = "rapidFire",
+        })
+    end
 
     host:section("Movement", "movement", "MOVEMENT", 70)
     host:option("movement", 1, "bhop", "Bunny Hop")
@@ -90,11 +118,11 @@ function Presentation.mount(host)
     host:option("movement", 3, "wallNoclip", "Wall Noclip")
     host:option("movement", 4, "redLightSafety", "Red Light Safety")
 
-    host:section("Settings", "taskFarming", "TASK FARMING", 70)
-    host:option("taskFarming", 1, "taskAutomationPaused", "Pause Task Farming")
+    host:section("Tools", "taskFarming", "TASK FARMING", 70)
     if type(host.keybind) == "function" then
-        host:keybind("taskFarming", "taskAutomationEmergencyKey", "Emergency stop", "End")
+        host:keybind("taskFarming", "taskAutomationEmergencyKey", "Emergency Stop", "End")
     end
+    host:option("taskFarming", 1, "taskAutomationEnabled", "Task Farming")
 
     host:section("Tools", "world", "WORLD", 70)
     host:option("world", 1, "autoPickup", "Auto Pickup")

@@ -32,13 +32,45 @@ function WeaponPolicy.automationPolicy(item)
     return ItemPolicy.automationPolicy(item)
 end
 
+function WeaponPolicy.capabilities(item)
+    return ItemPolicy.capabilities(item)
+end
+
+function WeaponPolicy.taskMeleeInRange(item, distance)
+    local info = item and item.Info
+    local reach = type(info) == "table"
+            and (info.AttackReach or info.HeavyAttackReach or info.BladeReach)
+        or nil
+    return ItemPolicy.capabilities(item).attack == "melee"
+        and type(reach) == "number"
+        and type(distance) == "number"
+        and distance <= reach
+end
+
+function WeaponPolicy.taskCanFinish(item, observation, distance)
+    local health = observation and observation.health
+    local damage = WeaponPolicy.finishingDamage(item, observation, distance)
+    local capability = ItemPolicy.capabilities(item)
+    if type(health) ~= "number" or type(damage) ~= "number" then
+        return false
+    end
+    if capability.attack == "melee" then
+        return WeaponPolicy.taskMeleeInRange(item, distance) and damage >= health
+    end
+    local ammo = WeaponPolicy.ammo(item)
+    return capability.attack == "gun"
+        and type(ammo) == "number"
+        and ammo > 0
+        and damage * ammo >= health
+end
+
 function WeaponPolicy.isScoped(item)
     return ItemPolicy.isScoped(item)
 end
 
 function WeaponPolicy.isAiming(item)
     if not item then
-        return false
+        return nil
     end
     if type(item.Get) == "function" then
         local succeeded, value = pcall(item.Get, item, "IsAiming")
@@ -47,7 +79,10 @@ function WeaponPolicy.isAiming(item)
         end
     end
     local data = item.Data
-    return type(data) == "table" and data.IsAiming == true
+    if type(data) == "table" and type(data.IsAiming) == "boolean" then
+        return data.IsAiming
+    end
+    return nil
 end
 
 function WeaponPolicy.isDualModeBlade(item)
@@ -110,6 +145,57 @@ function WeaponPolicy.ammo(item)
     end
     local data = item.Data
     return type(data) == "table" and type(data.Ammo) == "number" and data.Ammo or nil
+end
+
+function WeaponPolicy.movementProfile(item)
+    local info = item and item.Info
+    if type(info) ~= "table" then
+        return {}
+    end
+    local falloffStart = info.DamageFallOffStartDist or info.RaycastDamageDropoffStartDistance
+    local falloffEnd = info.DamageFallOffEndDist or info.RaycastDamageDropoffEndDistance
+    local sustained = info.Type == "Gun"
+        and info.IsRaycast == true
+        and type(info.ShootCooldown) == "number"
+        and info.ShootCooldown <= 0.15
+        and type(info.MaxAmmo) == "number"
+        and info.MaxAmmo >= 15
+    local ammo = WeaponPolicy.ammo(item)
+    local ready = type(ammo) == "number" and ammo > 0
+    local profile: any = {
+        kind = (info.Type == "Melee" or info.IsMelee == true) and "melee" or "ranged",
+        preferredMinimum = type(falloffStart) == "number" and falloffStart * 0.45 or nil,
+        preferredMaximum = type(falloffStart) == "number" and falloffStart or nil,
+        maximum = type(falloffEnd) == "number" and falloffEnd or nil,
+        sustained = sustained,
+    }
+    if type(ammo) == "number" then
+        profile.ready = ready
+    end
+    return profile
+end
+
+function WeaponPolicy.shouldTaskAim(item, movement)
+    if type(movement) ~= "table" then
+        return false
+    end
+    local info = item and item.Info
+    local profile = WeaponPolicy.movementProfile(item)
+    local intent = movement.intent
+    return type(info) == "table"
+        and info.IsRaycast == true
+        and profile.kind == "ranged"
+        and type(profile.maximum) == "number"
+        and type(movement.distance) == "number"
+        and movement.distance >= 10
+        and movement.distance <= profile.maximum
+        and movement.grounded == true
+        and movement.lineBlocked == false
+        and movement.mobilityPhase == nil
+        and intent ~= "evade"
+        and intent ~= "retreat"
+        and intent ~= "flank"
+        and intent ~= "highGround"
 end
 
 function WeaponPolicy.itemLabel(item)
@@ -325,6 +411,14 @@ function WeaponPolicy.holdToFire(item)
             and info.ShootCooldown <= AUTOMATIC_SHOOT_COOLDOWN
 end
 
+function WeaponPolicy.repeatShootingInput(item)
+    local info = item and item.Info
+    return WeaponPolicy.holdToFire(item)
+        and type(info) == "table"
+        and type(info.ShootCooldown) == "number"
+        and type(info.InternalUseCooldown) ~= "number"
+end
+
 function WeaponPolicy.gunbladeMode(item)
     if not ItemPolicy.isDualModeBlade(item) then
         return nil
@@ -509,7 +603,13 @@ end
 function WeaponPolicy.finishingDamage(item, observation, distance)
     local damage = WeaponPolicy.damageAtDistance(item, observation, distance)
     local info = item and item.Info
-    if type(damage) ~= "number" or type(info) ~= "table" then
+    if type(info) ~= "table" then
+        return nil
+    end
+    if type(damage) ~= "number" and ItemPolicy.capabilities(item).attack == "melee" then
+        damage = info.AttackDamage or info.CriticalDamage
+    end
+    if type(damage) ~= "number" then
         return nil
     end
 

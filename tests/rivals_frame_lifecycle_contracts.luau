@@ -28,6 +28,26 @@ contains(
 contains("disconnectFrame()")
 contains("effects:renderTrajectory(nil)")
 contains("runTriggerBot(nil, false)")
+local firstObservation = assert(
+    string.find(source, "observations, visualObservations = observationRuntime:update", 1, true)
+)
+local cameraAim = assert(
+    string.find(
+        source,
+        "alignedTarget = alignCamera(false, taskCombatActive)",
+        firstObservation,
+        true
+    )
+)
+local visualRefresh = assert(
+    string.find(source, "local _, refreshedVisuals = observationRuntime:update", cameraAim, true)
+)
+local overlayRender =
+    assert(string.find(source, "context.render(visualObservations", visualRefresh, true))
+assert(
+    firstObservation < cameraAim and cameraAim < visualRefresh and visualRefresh < overlayRender,
+    "Drawing ESP must reproject observations after Camera Aim commits the final camera frame"
+)
 local frameStart = assert(string.find(source, "local function frameWorkEnabled(state)", 1, true))
 local frameEnd = assert(string.find(source, "local function connectFrame()", frameStart, true))
 local frameBlock = string.sub(source, frameStart, frameEnd - 1)

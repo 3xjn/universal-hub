@@ -159,6 +159,7 @@ function Catalog:aim()
         or self.available.shotAim
         or self.available.triggerBot
         or self.available.aimSmoothness
+        or self.available.aimAssistStrength
         or self.available.headshotRate
         or self.available.missRate
     if self.hasAim or not supported then
@@ -226,6 +227,7 @@ function Catalog:section(page, id, label, lineOffset, includesRates, columns, sp
         includesRates = includesRates == true,
         columns = columns or 1,
         ephemeral = isEphemeral(page, spec),
+        renderEmpty = spec.renderEmpty == true,
         treatment = spec.treatment,
         actions = {},
         options = {},
@@ -240,7 +242,8 @@ function Catalog:button(sectionId, id, label, spec)
     if not self.available[id] then
         return
     end
-    local group = assert(self.groupById[sectionId], "Unknown presentation section: " .. tostring(sectionId))
+    local group =
+        assert(self.groupById[sectionId], "Unknown presentation section: " .. tostring(sectionId))
     spec = type(spec) == "table" and spec or { variant = spec }
     table.insert(group.actions, {
         action = id,
@@ -379,6 +382,18 @@ local function selectedSegmentValue(segment, settings)
     return selected
 end
 
+local function selectedTargetMode(settings, cameraMode)
+    local mode = cameraMode and settings.cameraTargetMode or settings.shotTargetMode
+    if mode == "radius" or mode == "fullscreen" or mode == "360" then
+        return mode
+    end
+    local fullScreenAim = cameraMode
+            and (settings.cameraFullScreenAim == nil and settings.fullScreenAim or settings.cameraFullScreenAim)
+        or not cameraMode
+            and (settings.shotFullScreenAim == nil and settings.fullScreenAim or settings.shotFullScreenAim)
+    return fullScreenAim == true and "fullscreen" or "radius"
+end
+
 function Catalog:model(state)
     self:finalize()
     state = state or self.context.store:Get()
@@ -401,12 +416,20 @@ function Catalog:model(state)
             },
         }
         for _, related in ipairs(segment.related or {}) do
-            if related.when == selected and self.available[related.id] then
+            local kind = related.kind or "toggle"
+            local parentActive = not related.parent or settings[related.parent] == true
+            if related.when == selected and self.available[related.id] and parentActive then
+                local value = settings[related.id]
                 append(controls, {
                     id = related.id,
-                    kind = related.kind or "toggle",
+                    kind = kind,
                     label = related.label,
-                    value = settings[related.id] == true,
+                    max = kind == "slider" and (related.max or 100) or nil,
+                    min = kind == "slider" and (related.min or 0) or nil,
+                    parent = related.parent,
+                    step = kind == "slider" and (related.step or 1) or nil,
+                    unit = kind == "slider" and related.unit or nil,
+                    value = kind == "slider" and value or value == true,
                     status = self.optionSupport[related.id] == false and "unavailable"
                         or "available",
                 })
@@ -416,6 +439,47 @@ function Catalog:model(state)
             id = segment.id,
             label = segment.sectionLabel or segment.label,
             treatment = segment.treatment or (segment.id == "worldRenderer" and "style" or "card"),
+            controls = controls,
+        })
+    end
+
+    if self.hasAim then
+        local cameraMode = settings.shotAim ~= true
+        local targetMode = selectedTargetMode(settings, cameraMode)
+        local targetOptions = {
+            { value = "radius", label = "Radius" },
+            { value = "fullscreen", label = "Fullscreen" },
+        }
+        if self.available.target360 then
+            table.insert(targetOptions, { value = "360", label = "360" })
+        end
+        local controls = {
+            {
+                id = "fullScreenAim",
+                kind = "segmented",
+                label = "Target Mode",
+                value = targetMode,
+                emphasis = "prominent",
+                options = targetOptions,
+            },
+        }
+        if targetMode == "radius" then
+            append(controls, {
+                id = "fov",
+                kind = "slider",
+                label = "FOV",
+                value = (cameraMode and settings.cameraFov or settings.shotFov) or settings.fov,
+                min = settings.minimumFov,
+                max = settings.maximumFov,
+                step = 1,
+                unit = "px",
+                emphasis = "row",
+            })
+        end
+        append(sectionsByPage.Combat, {
+            id = "targeting",
+            label = "Targeting",
+            treatment = "card",
             controls = controls,
         })
     end
@@ -443,46 +507,14 @@ function Catalog:model(state)
         })
     end
 
-    if self.hasAim then
-        local cameraMode = settings.shotAim ~= true
-        local fov = (cameraMode and settings.cameraFov or settings.shotFov) or settings.fov
-        local fullScreenAim = cameraMode
-                and (settings.cameraFullScreenAim == nil and settings.fullScreenAim or settings.cameraFullScreenAim)
-            or not cameraMode
-                and (settings.shotFullScreenAim == nil and settings.fullScreenAim or settings.shotFullScreenAim)
-        append(sectionsByPage.Combat, {
-            id = "targeting",
-            label = "Targeting",
-            treatment = "card",
-            controls = {
-                {
-                    id = "fov",
-                    kind = "slider",
-                    label = "FOV",
-                    value = fov,
-                    min = settings.minimumFov,
-                    max = settings.maximumFov,
-                    step = 1,
-                    unit = "px",
-                    emphasis = "row",
-                    disabled = fullScreenAim == true,
-                },
-                {
-                    id = "fullScreenAim",
-                    kind = "segmented",
-                    label = "Target Mode",
-                    value = fullScreenAim and "fullscreen" or "radius",
-                    options = {
-                        { value = "radius", label = "Radius" },
-                        { value = "fullscreen", label = "Fullscreen" },
-                    },
-                },
-            },
-        })
-    end
-
     for _, group in ipairs(self.groups) do
-        if #group.actions > 0 or #group.options > 0 or #group.keybinds > 0 or #group.sliders > 0 then
+        if
+            #group.actions > 0
+            or #group.options > 0
+            or #group.keybinds > 0
+            or #group.sliders > 0
+            or group.renderEmpty
+        then
             local controls = {}
             for _, action in ipairs(group.actions) do
                 append(controls, {
@@ -573,7 +605,7 @@ function Catalog:model(state)
                     emphasis = "row",
                 })
             end
-            if #controls > 0 then
+            if #controls > 0 or group.renderEmpty then
                 local treatment = group.treatment
                 if treatment == nil then
                     local metadata = self.pageMetadata[group.page] or {}
@@ -904,6 +936,7 @@ function Catalog:model(state)
         brandIcon = self.context.brandIcon,
         gameLabel = self.context.gameLabel or "Universal",
         gameIcon = self.context.gameIcon,
+        floatingMonitor = type(state.floatingMonitor) == "table" and state.floatingMonitor or nil,
         notification = type(state.notification) == "table" and state.notification or nil,
         enemyAudienceIcon = self.context.enemyAudienceIcon,
         allyAudienceIcon = self.context.allyAudienceIcon,
@@ -940,12 +973,17 @@ function Catalog:model(state)
                         for _, related in ipairs(segment.related or {}) do
                             local retained = self.relatedValues[related.id]
                             if related.when == value and retained ~= nil then
-                                self.context.setOption(related.id, retained, shouldPersist)
+                                if type(retained) == "boolean" then
+                                    self.context.setOption(related.id, retained, shouldPersist)
+                                else
+                                    self.context.setRate(related.id, retained, shouldPersist)
+                                end
                             end
                         end
                         if id == "aimMode" then
                             local settings = self.context.store:Get().settings
                             local shotOnly = settings.shotAim == true
+                            local targetMode = selectedTargetMode(settings, not shotOnly)
                             self.context.setFov(
                                 (shotOnly and settings.shotFov or settings.cameraFov)
                                     or settings.fov,
@@ -953,11 +991,7 @@ function Catalog:model(state)
                             )
                             self.context.setOption(
                                 "fullScreenAim",
-                                (
-                                    shotOnly and settings.shotFullScreenAim
-                                    or not shotOnly and settings.cameraFullScreenAim
-                                )
-                                    == true,
+                                targetMode ~= "radius",
                                 shouldPersist
                             )
                         end
@@ -1015,14 +1049,18 @@ function Catalog:model(state)
                 end
             elseif id == "fullScreenAim" then
                 local settings = self.context.store:Get().settings
-                local name = settings.shotAim == true and "shotFullScreenAim"
-                    or "cameraFullScreenAim"
-                if settings[name] == nil then
-                    name = "fullScreenAim"
+                local modeName = settings.shotAim == true and "shotTargetMode" or "cameraTargetMode"
+                if settings[modeName] ~= nil then
+                    self.context.setSetting(modeName, value, persist == true)
                 end
-                self.context.setOption(name, value == "fullscreen", true)
-                if name ~= "fullScreenAim" then
-                    self.context.setOption("fullScreenAim", value == "fullscreen", true)
+                local fullScreenName = settings.shotAim == true and "shotFullScreenAim"
+                    or "cameraFullScreenAim"
+                if settings[fullScreenName] == nil then
+                    fullScreenName = "fullScreenAim"
+                end
+                self.context.setOption(fullScreenName, value ~= "radius", persist == true)
+                if fullScreenName ~= "fullScreenAim" then
+                    self.context.setOption("fullScreenAim", value ~= "radius", persist == true)
                 end
             elseif id == "cosmeticWear" and self.context.setWear then
                 local cosmetics = self.context.store:Get().cosmetics or {}

@@ -60,6 +60,7 @@ local store = Store.new({
     cosmeticsOpen = false,
     menuVisible = true,
     settings = {
+        aimAssistStrength = 60,
         aimSmoothness = 0,
         cameraFov = 100,
         enabled = false,
@@ -119,6 +120,11 @@ assert(store:Get().menuVisible == true)
 session:setCosmeticsOpen(true)
 assert(store:Get().cosmeticsOpen == true, "Cosmetics disclosure must be reactive UI state")
 assert(#savedSettings == 5, "Only persistent settings changes should request a config save")
+session:setRate("aimAssistStrength", 85, false)
+assert(
+    store:Get().settings.aimAssistStrength == 85 and #savedSettings == 5,
+    "Assist Strength must update live without persisting until slider release"
+)
 session:setRate("aimSmoothness", 55, false)
 assert(
     store:Get().settings.aimSmoothness == 55 and #savedSettings == 5,

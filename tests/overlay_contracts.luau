@@ -1375,7 +1375,7 @@ local rivalsOverlay = Overlay.new({
         }
     end,
     optionLabels = {
-        humanAim = "Human Aim",
+        humanAim = "Aim Assist",
         silentAim = "Camera Aim",
     },
     setRate = function() end,

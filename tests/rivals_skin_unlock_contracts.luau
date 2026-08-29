@@ -137,6 +137,17 @@ function clientViewModelLibrary.new(serial)
     replacement._is_equipped = false
     return replacement
 end
+local nativeViewModelBuilds = 0
+local nativeViewModelClass = {}
+function nativeViewModelClass.new(serial)
+    nativeViewModelBuilds += 1
+    local replacement = fakeViewModel(serial.Data)
+    replacement._is_equipped = false
+    function replacement:GetChargeColor()
+        return "native-charge-color"
+    end
+    return replacement
+end
 local fighterController = { LocalFighter = nil }
 
 local equipmentState = {
@@ -186,6 +197,9 @@ local function runtime()
             return 8
         end,
         setThreadIdentity = function() end,
+        viewModelClassFor = function(weaponName)
+            return weaponName == "Assault Rifle" and nativeViewModelClass or nil
+        end,
     })
 end
 
@@ -255,7 +269,12 @@ assert(activeViewModel.Data.Charm.Name == "Visible Charm")
 assert(activeViewModel.Model.Parent == "FirstPerson" and activeViewModel._is_equipped == true)
 assert(hotbarIcon.Image == "image:Visible Skin")
 assert(equippedIcon.Image == "image:Visible Skin")
-assert(viewModelBuilds >= 3, "local cosmetics must rebuild the native viewmodel")
+assert(
+    nativeViewModelBuilds >= 3
+        and viewModelBuilds == 0
+        and activeViewModel:GetChargeColor() == "native-charge-color",
+    "local cosmetics must rebuild through the weapon-specific native viewmodel class"
+)
 assert(weaponInventory[1].Wrap.Inverted == true)
 equipmentState.CustomizingType = "Wrap"
 equipmentStateLibrary.SetCosmeticInvertedState(equipmentState, false)

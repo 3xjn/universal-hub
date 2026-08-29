@@ -161,6 +161,9 @@ function SkinUnlock.new(options)
         onEquippedChanged = options.onEquippedChanged or function() end,
         setThreadIdentity = options.setThreadIdentity or SET_THREAD_IDENTITY,
         onRestoreChanged = options.onRestoreChanged or function() end,
+        viewModelClassFor = options.viewModelClassFor or function()
+            return nil
+        end,
         originalOwnsCosmetic = options.cosmeticLibrary.OwnsCosmetic,
         originalSelectCosmetic = options.equipmentStateLibrary.SelectCosmetic,
         originalSetCosmeticInvertedState = options.equipmentStateLibrary.SetCosmeticInvertedState,
@@ -320,7 +323,10 @@ function SkinUnlock:_applyViewModelForWeapon(weaponName, cosmetics, force)
             end
         end
 
-        replacement = self.clientViewModelLibrary.new(serial, item)
+        local viewModelClass = self.viewModelClassFor(weaponName) or getmetatable(old)
+        local constructor = type(viewModelClass) == "table" and viewModelClass.new
+            or self.clientViewModelLibrary.new
+        replacement = constructor(serial, item)
         local parent = old.Model and old.Model.Parent
         local pivot = old.Model and old.Model:GetPivot()
         if wasEquipped then

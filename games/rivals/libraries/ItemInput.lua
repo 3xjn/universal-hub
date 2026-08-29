@@ -102,6 +102,10 @@ function ItemInput:releaseAim()
     return true
 end
 
+function ItemInput:disownAim()
+    self.aimHeld = false
+end
+
 function ItemInput:releaseAll()
     self:releaseAim()
     self:releaseFire()

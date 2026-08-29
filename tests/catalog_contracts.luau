@@ -26,6 +26,7 @@ local expectedDefaults = {
     chamsPerPart = false,
     cameraFov = 180,
     cameraFullScreenAim = false,
+    cameraTargetMode = "radius",
     fov = 180,
     fovCircle = true,
     fullScreenAim = false,
@@ -71,6 +72,7 @@ local expectedDefaults = {
     alwaysScoped = false,
     shotFov = 180,
     shotFullScreenAim = false,
+    shotTargetMode = "radius",
     shotAim = false,
     showEnemies = true,
     showTeammates = false,
@@ -213,15 +215,20 @@ for _, path in ipairs(Catalog) do
         local expectedState = expectedInitialState
         if definition.id == "rivals" then
             expected = Compatibility.Defaults()
+            expected.aimAssistStrength = 60
             expected.autoCounter = false
             expected.redLightSafety = false
-            expected.taskAutomationPaused = true
+            expected.taskAutomationEnabled = false
             expected.taskAutomationEmergencyKey = "End"
             expected.infiniteJump = false
             expected.wallNoclip = false
             expected.teleportBehind = false
             expected.skipDeflect = false
             expected.autoDeflect = false
+            expected.rapidFire = false
+            expected.fireRate = 200
+            expected.flickProjectiles = false
+            expected.quickReload = false
             expected.unlockAllSkins = false
             expected.unlockAllSkinsRestore = {}
             expected.unlockAllCosmeticsEquipped = {}
@@ -283,16 +290,21 @@ for _, id in ipairs({ "counterblox", "rivals", "town" }) do
         for _ in pairs(rawDefinitions[id].defaults) do
             count += 1
         end
-        defaultsAreSparse = count == 13
+        defaultsAreSparse = count == 18
+            and rawDefinitions[id].defaults.aimAssistStrength == 60
             and rawDefinitions[id].defaults.autoCounter == false
             and rawDefinitions[id].defaults.redLightSafety == false
-            and rawDefinitions[id].defaults.taskAutomationPaused == true
+            and rawDefinitions[id].defaults.taskAutomationEnabled == false
             and rawDefinitions[id].defaults.taskAutomationEmergencyKey == "End"
             and rawDefinitions[id].defaults.infiniteJump == false
             and rawDefinitions[id].defaults.wallNoclip == false
             and rawDefinitions[id].defaults.teleportBehind == false
             and rawDefinitions[id].defaults.skipDeflect == false
             and rawDefinitions[id].defaults.autoDeflect == false
+            and rawDefinitions[id].defaults.rapidFire == false
+            and rawDefinitions[id].defaults.fireRate == 200
+            and rawDefinitions[id].defaults.flickProjectiles == false
+            and rawDefinitions[id].defaults.quickReload == false
             and rawDefinitions[id].defaults.unlockAllSkins == false
             and type(rawDefinitions[id].defaults.unlockAllSkinsRestore) == "table"
             and next(rawDefinitions[id].defaults.unlockAllSkinsRestore) == nil

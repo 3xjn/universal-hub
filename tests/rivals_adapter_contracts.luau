@@ -9,6 +9,7 @@ local Rivals = require("../games/rivals/Adapter")
 RivalsDefinition = require("../games/rivals/Definition")
 local RivalsTargeting = require("../games/rivals/libraries/Targeting")
 local RivalsProjectileAim = require("../games/rivals/libraries/ProjectileAim")
+RivalsCameraAim = require("../games/rivals/features/CameraAim")
 local RivalsShotPresentation = require("../games/rivals/features/ShotPresentation")
 local RivalsWeaponPolicy = require("../games/rivals/libraries/WeaponPolicy")
 local RivalsEffects = require("../games/rivals/world/Effects")
@@ -33,6 +34,7 @@ assert(
         and table.find(RivalsDefinition.features.capabilities, "alwaysScoped")
         and table.find(RivalsDefinition.features.capabilities, "humanAim")
         and table.find(RivalsDefinition.features.capabilities, "aimSmoothness")
+        and table.find(RivalsDefinition.features.capabilities, "aimAssistStrength")
         and table.find(RivalsDefinition.features.capabilities, "headshotRate")
         and table.find(RivalsDefinition.features.capabilities, "missRate")
 )
@@ -146,6 +148,21 @@ do
     pickupFighter.EquippedItem.Data.Ammo = 13
     pickupFighter.EquippedItem.Data.AmmoReserve = 91
     assert(Rivals.shouldCollectPickup("AmmoBalanced", pickupFighter) == false)
+    pickupFighter.EquippedItem.Get = function(_self, key)
+        return key == "Ammo" and 2 or key == "AmmoReserve" and 91 or nil
+    end
+    assert(
+        Rivals.shouldCollectPickup("AmmoBalanced", pickupFighter) == true,
+        "Auto Pickup must prefer live replicated ammo over stale item Data"
+    )
+    pickupFighter.EquippedItem.Get = function(_self, key)
+        return key == "Ammo" and 13 or key == "AmmoReserve" and 91 or nil
+    end
+    pickupFighter.EquippedItem.Data.Ammo = 2
+    assert(
+        Rivals.shouldCollectPickup("AmmoBalanced", pickupFighter) == false,
+        "Auto Pickup must not consume ammo when the live replicated capacity is full"
+    )
     assert(Rivals.shouldCollectPickup("Unknown", pickupFighter) == false)
 
     assert(
@@ -197,6 +214,23 @@ do
             "skipDeflect"
         ) ~= nil,
         "Katana Stop must appear when StartShooting can be hooked"
+    )
+    assert(
+        table.find(
+            Rivals.capabilitiesFor({
+                hookFunctionAvailable = false,
+                restoreFunctionAvailable = false,
+            }, RivalsDefinition.features.capabilities),
+            "flickProjectiles"
+        ) == nil
+            and table.find(
+                Rivals.capabilitiesFor({
+                    hookFunctionAvailable = true,
+                    restoreFunctionAvailable = true,
+                }, RivalsDefinition.features.capabilities),
+                "flickProjectiles"
+            ) ~= nil,
+        "Flick Projectiles must require the native camera-data hook"
     )
 end
 
@@ -298,7 +332,7 @@ assert(
         Vector3.zero,
         { maxScreenDistance = 180 }
     ) == closestCandidate,
-    "Human Aim must prioritize physical distance over cursor distance"
+    "World-distance selection must prioritize physical distance over cursor distance"
 )
 assert(
     RivalsTargeting.closestObservation(
@@ -306,7 +340,7 @@ assert(
         Vector3.zero,
         { maxScreenDistance = 40 }
     ) == cursorCandidate,
-    "Human Aim must still respect the configured camera FOV"
+    "World-distance selection must still respect an explicit screen gate"
 )
 assert(
     RivalsTargeting.closestObservation({
@@ -343,7 +377,7 @@ assert(
             maxScreenDistance = 180,
         }
     ) == cursorCandidate,
-    "Human Aim must skip a physically closer opponent while their spawn protection is active"
+    "World-distance selection must skip an ineligible protected opponent"
 )
 
 local aimRoot = {
@@ -793,6 +827,7 @@ local bow = {
         ChargeReleaseCooldown = 1,
         CriticalDamage = 60,
         IsProjectile = true,
+        ProjectileSpeed = 300,
         ShootDamage = 30,
         ShootCooldown = 0.25,
     },
@@ -1440,6 +1475,74 @@ do
     )
 end
 do
+    local fastTargetRoot = {
+        AssemblyLinearVelocity = Vector3.new(45, 12, -20),
+    }
+    local fastTarget = Vector3.new(140, 8, -30)
+    local fastInfo = {
+        ProjectileGravity = 0.25,
+        ProjectileLifetime = 5,
+        ProjectileSpawnOffset = CFrame.new(0, -1, -2) * CFrame.Angles(math.rad(4), 0, 0),
+        ProjectileSpeed = 300,
+    }
+    local fastAim = RivalsProjectileAim.solveProjectileAim(Vector3.new(0, 5, 0), {
+        character = {
+            FindFirstChild = function(_self, name)
+                return name == "HumanoidRootPart" and fastTargetRoot or nil
+            end,
+        },
+        part = {
+            AssemblyLinearVelocity = Vector3.zero,
+        },
+        position = fastTarget,
+    }, fastInfo, 196.2)
+    local fastImpact = fastAim.launchOrigin
+        + fastAim.projectileDirection * (fastInfo.ProjectileSpeed * fastAim.flightTime)
+        + Vector3.new(0, -196.2 * fastInfo.ProjectileGravity, 0)
+            * (0.5 * fastAim.flightTime * fastAim.flightTime)
+    local fastExpected = fastTarget + fastTargetRoot.AssemblyLinearVelocity * fastAim.flightTime
+    assert(
+        (fastImpact - fastExpected).Magnitude < 0.05
+            and (fastAim.predictedPosition - fastExpected).Magnitude < 0.05,
+        "Direct projectile prediction must converge on live root velocity even when a proxy is stale"
+    )
+    assert(
+        RivalsProjectileAim.directPathClear(fastAim, fastInfo, function()
+            return nil
+        end, 196.2)
+            and not RivalsProjectileAim.directPathClear(fastAim, fastInfo, function(rayOrigin, ray)
+                return { Position = rayOrigin + ray * 0.5 }
+            end, 196.2),
+        "Direct projectile paths must reject cover between the native launch offset and target"
+    )
+end
+do
+    local groundedRoot = {
+        AssemblyLinearVelocity = Vector3.new(30, 14, 0),
+    }
+    local groundedTarget = Vector3.new(120, 8, 0)
+    local groundedAim = RivalsProjectileAim.solveProjectileAim(Vector3.new(0, 5, 0), {
+        character = {
+            FindFirstChild = function(_self, name)
+                return name == "HumanoidRootPart" and groundedRoot or nil
+            end,
+        },
+        position = groundedTarget,
+        velocity = Vector3.new(30, 0, 0),
+    }, {
+        ProjectileGravity = 0.25,
+        ProjectileLifetime = 5,
+        ProjectileSpeed = 300,
+    }, 196.2)
+    local groundedExpected = groundedTarget
+        + Vector3.new(groundedRoot.AssemblyLinearVelocity.X, 0, groundedRoot.AssemblyLinearVelocity.Z)
+            * groundedAim.flightTime
+    assert(
+        (groundedAim.predictedPosition - groundedExpected).Magnitude < 0.05,
+        "Projectile lead must prefer sampled motion over noisy replicated root velocity"
+    )
+end
+do
     local bowCameraOrigin = Vector3.new(0, 5, 0)
     local bowInfo = {
         ProjectileGravity = 0.25,
@@ -1505,28 +1608,28 @@ assert(
     "Zero Camera Aim smoothness must preserve instant rotation"
 )
 
+assert(type(RivalsTargeting.humanRotation) == "function")
+local assistTarget = Vector2.new(0, math.rad(3))
+local assisted = RivalsTargeting.humanRotation(Vector2.zero, assistTarget, 70, 1 / 60)
+local automatic = RivalsTargeting.smoothRotation(Vector2.zero, assistTarget, 70, 1 / 60)
 assert(
-    type(RivalsTargeting.humanRotation) == "function",
-    "Human Aim must provide motion-responsive curved tracking"
+    assisted.Y > 0 and assisted.Y < automatic.Y and assisted.X == 0,
+    "Human Aim must add a small direct correction instead of automatic curved steering"
 )
-local humanAimState = { curveSign = 1 }
-local humanStartTarget = Vector2.new(0, 0.35)
-local humanStart =
-    RivalsTargeting.humanRotation(Vector2.zero, humanStartTarget, 70, 1 / 60, humanAimState)
-local fastHumanTarget = Vector2.new(0, 0.5)
-local fixedSpeedFollow = RivalsTargeting.smoothRotation(humanStart, fastHumanTarget, 70, 1 / 60)
-local adaptiveFollow =
-    RivalsTargeting.humanRotation(humanStart, fastHumanTarget, 70, 1 / 60, humanAimState)
 assert(
-    (fastHumanTarget - adaptiveFollow).Magnitude < (fastHumanTarget - fixedSpeedFollow).Magnitude,
-    "Human Aim must accelerate to reduce trailing error when the target moves quickly"
+    assisted.Magnitude <= math.rad(8) / 60,
+    "Aim Assist correction must remain bounded below automatic steering speed"
 )
-assert(adaptiveFollow ~= fastHumanTarget, "Human Aim must not snap perfectly onto a moving target")
 assert(
-    math.abs(adaptiveFollow.X) > 0 and math.abs(adaptiveFollow.X) <= math.rad(0.5),
-    "Human Aim must follow a subtle curved path that remains close to the target"
+    RivalsTargeting.humanRotation(Vector2.zero, assistTarget, 70, 1 / 60, 0)
+        == Vector2.zero,
+    "0% Assist Strength must not move the camera"
 )
-
+assert(
+    RivalsTargeting.humanRotation(Vector2.zero, assistTarget, 70, 1 / 60, 100).Magnitude
+        > assisted.Magnitude * 2,
+    "100% Assist Strength must provide a decisively stronger correction"
+)
 local knifeTargetRoot = {
     CFrame = CFrame.lookAt(Vector3.new(5, 0, 0), Vector3.new(6, 0, 0)),
     Position = Vector3.new(5, 0, 0),
@@ -2360,6 +2463,7 @@ local targeting = {
     end,
 }
 local settings = {
+    aimAssistStrength = 60,
     aimSmoothness = 0,
     bhop = false,
     cameraFov = 180,
@@ -2378,6 +2482,7 @@ local settings = {
     utilityEsp = true,
 }
 local state = {
+    _crosshairTargetEnabled = true,
     _patches = 0,
     settings = settings,
 }
@@ -2461,6 +2566,24 @@ fighterModule.LocalFighter.Input = function(_self, action)
 end
 local adapter = Rivals.new({
     capabilities = RivalsDefinition.features.capabilities,
+    contextActionService = {
+        BindActionAtPriority = function() end,
+        UnbindAction = function() end,
+    },
+    selectCrosshairTarget = function(values)
+        if not state._crosshairTargetEnabled then
+            return nil
+        end
+        local selected
+        local selectedDistance = math.huge
+        for _, value in ipairs(values) do
+            if type(value.screenDistance) == "number" and value.screenDistance < selectedDistance then
+                selected = value
+                selectedDistance = value.screenDistance
+            end
+        end
+        return selectedDistance <= 8 and selected or nil
+    end,
     taskFarmRuntime = taskFarmRuntime,
     aimPress = function()
         aimPresses += 1
@@ -2617,6 +2740,11 @@ local adapter = Rivals.new({
             return loadoutOpen
         end,
     },
+    setOption = function(name, enabled)
+        local updated = table.clone(store:Get().settings)
+        updated[name] = enabled == true
+        store:Patch({ settings = updated })
+    end,
     store = store,
     wait = function() end,
 })
@@ -2660,7 +2788,7 @@ assert(
 )
 fighterModule._player_to_fighter[enemyPlayer].EquippedItem = targetItem
 assert(rangeObservation.player == rangeTarget)
-assert(rangeObservation.health == math.huge and rangeObservation.maxHealth == math.huge)
+assert(rangeObservation.health == 150 and rangeObservation.maxHealth == 150)
 assert(
     rotationCalls == 1
         and cameraModule.Rotation == RivalsTargeting.rotationToward(origin, targetPosition),
@@ -2775,13 +2903,13 @@ do
     assert(
         #cameraHarness.pickupTouches == 4
             and firstPickup.part == pickupRoot
-            and firstPickup.toggle == 1
+            and firstPickup.toggle == 0
             and secondPickup.target == firstPickup.target
-            and secondPickup.toggle == 0
+            and secondPickup.toggle == 1
             and thirdPickup.part == pickupRoot
-            and thirdPickup.toggle == 1
+            and thirdPickup.toggle == 0
             and fourthPickup.target == thirdPickup.target
-            and fourthPickup.toggle == 0
+            and fourthPickup.toggle == 1
             and touchedTargets[healthPickup]
             and touchedTargets[ammoPickup],
         "Gun Game Auto Pickup must follow Volt's Touched-then-TouchEnded sequence"
@@ -2995,16 +3123,57 @@ cameraModule.Rotation = Vector2.zero
 local nearestCallsBeforeHumanAim = #nearestOptions
 currentTime += 1
 renderCallback(1 / 60)
-local closestRotation = RivalsTargeting.rotationToward(origin, closestRuntimePosition)
+local assistedRotation = RivalsTargeting.rotationToward(origin, targetPosition)
 assert(
-    #nearestOptions == nearestCallsBeforeHumanAim,
-    "Human Aim must bypass cursor-distance target ranking"
+    #nearestOptions == nearestCallsBeforeHumanAim + 1
+        and nearestOptions[#nearestOptions].maxScreenDistance
+            == math.min(
+                settings.cameraFov or settings.fov or math.huge,
+                RivalsCameraAim.humanAimRadius(settings.aimAssistStrength)
+            )
+        and nearestOptions[#nearestOptions].maxScreenDistance > 160,
+    "Human Aim must acquire a broad assist radius while strength falls with distance"
 )
 assert(
-    (cameraModule.Rotation - closestRotation).Magnitude < closestRotation.Magnitude
-        and cameraModule.Rotation ~= closestRotation,
-    "Human Aim must smoothly move toward the physically closest eligible target"
+    (cameraModule.Rotation - assistedRotation).Magnitude < assistedRotation.Magnitude
+        and cameraModule.Rotation ~= assistedRotation,
+    "Human Aim must gently help toward the cursor-ranked target without locking"
 )
+state._humanAssistRotationCalls = rotationCalls
+observations[1].visible = false
+rangeObservation.visible = false
+closestRuntimeTarget.visible = false
+cameraModule.Rotation = Vector2.zero
+currentTime += 1 / 60
+renderCallback(1 / 60)
+assert(
+    rotationCalls == state._humanAssistRotationCalls and cameraModule.Rotation == Vector2.zero,
+    "Human Aim must never steer toward a target through walls"
+)
+observations[1].visible = true
+rangeObservation.visible = true
+closestRuntimeTarget.visible = true
+state._humanAssistRotationCalls = rotationCalls
+observations[1].screenDistance = 200
+rangeObservation.screenDistance = 200
+closestRuntimeTarget.screenDistance = 200
+cameraModule.Rotation = Vector2.zero
+currentTime += 1 / 60
+renderCallback(1 / 60)
+assert(
+    rotationCalls == state._humanAssistRotationCalls,
+    "Human Aim must not steer when the player is outside the assist radius"
+)
+settings.aimAssistStrength = 100
+currentTime += 1 / 60
+renderCallback(1 / 60)
+assert(
+    rotationCalls == state._humanAssistRotationCalls,
+    "Assist Strength must not override the player's configured camera radius"
+)
+settings.aimAssistStrength = 60
+observations[1].screenDistance = 40
+rangeObservation.screenDistance = 40
 table.remove(observations, assert(table.find(observations, closestRuntimeTarget)))
 settings.humanAim = false
 
@@ -3051,16 +3220,49 @@ assert(
     "Camera Aim must invalidate a cached body plan immediately when Miss Rate changes"
 )
 settings.missRate = 0
+settings.headshotRate = 50
+currentTime += 1
+renderCallback()
+local firstRateRotation = cameraModule.Rotation
+assert(
+    firstRateRotation == RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position),
+    "A 50% Headshot Rate must begin with a body plan"
+)
+currentTime += 5
+renderCallback()
+assert(
+    cameraModule.Rotation == firstRateRotation,
+    "Camera Aim must not reroll head versus body while no shot is fired"
+)
+local rateCameraDataHook = hookImplementations[fighterModule.LocalFighter.GetCameraData]
+assert(rateCameraDataHook, "Camera Aim rates must observe the native shot camera-data seam")
+rateCameraDataHook(fighterModule.LocalFighter)
+currentTime += 0.01
+renderCallback()
+assert(
+    cameraModule.Rotation == RivalsTargeting.rotationToward(origin, runtimeAimHead.Position),
+    "The second shot in a 50% tracked rate must advance to a head plan"
+)
+rateCameraDataHook(fighterModule.LocalFighter)
+currentTime += 0.01
+renderCallback()
+assert(
+    cameraModule.Rotation == RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position),
+    "Tracked Headshot Rate must keep one headshot per two fired shots"
+)
+settings.headshotRate = 0
 settings.humanAim = true
 cameraModule.Rotation = Vector2.zero
 for _ = 1, 24 do
     currentTime += 1 / 60
     renderCallback(1 / 60)
 end
+state._bodyAssistRotation = cameraModule.Rotation
 assert(
-    (cameraModule.Rotation - RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position)).Magnitude
-        < (cameraModule.Rotation - RivalsTargeting.rotationToward(origin, runtimeAimHead.Position)).Magnitude,
-    "Human Aim with a 0% Headshot Rate must converge on the visible body candidate"
+    cameraModule.Rotation.Magnitude > 0
+        and cameraModule.Rotation
+            ~= RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position),
+    "Aim Assist must gently bias toward the visible body without taking over"
 )
 settings.headshotRate = 100
 cameraModule.Rotation = Vector2.zero
@@ -3069,9 +3271,10 @@ for _ = 1, 24 do
     renderCallback(1 / 60)
 end
 assert(
-    (cameraModule.Rotation - RivalsTargeting.rotationToward(origin, runtimeAimHead.Position)).Magnitude
-        < (cameraModule.Rotation - RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position)).Magnitude,
-    "Human Aim with a 100% Headshot Rate must converge on Head"
+    cameraModule.Rotation.X > state._bodyAssistRotation.X
+        and cameraModule.Rotation
+            ~= RivalsTargeting.rotationToward(origin, runtimeAimHead.Position),
+    "Aim Assist may favor the head without hard-locking it"
 )
 settings.humanAim = false
 settings.headshotRate = 0
@@ -3091,12 +3294,13 @@ currentTime += 1 / 60
 renderCallback(1 / 60)
 assert(
     (movedHeadRotation - cameraModule.Rotation).Magnitude
-        < (movedHeadRotation - fixedHeadFollow).Magnitude,
-    "Human Aim must refresh the moving head position and speed up enough to keep it relatively tracked"
+        > (movedHeadRotation - fixedHeadFollow).Magnitude,
+    "Human Aim must assist less than automatic Camera Aim smoothing"
 )
 assert(
-    cameraModule.Rotation ~= movedHeadRotation,
-    "Human Aim must stay imperfect instead of hard-locking the head"
+    (cameraModule.Rotation - humanHeadStart).Magnitude > 0
+        and (cameraModule.Rotation - humanHeadStart).Magnitude <= math.rad(8) / 60,
+    "Aim Assist must make a bounded correction toward a moving target"
 )
 settings.humanAim = false
 settings.headshotRate = 0
@@ -3106,21 +3310,33 @@ local clicksBeforeSmoothAim = clicks
 settings.aimSmoothness = 100
 settings.triggerBot = true
 cameraModule.Rotation = Vector2.zero
+target.screenDistance = 4
+observations[1].screenDistance = 4
+state._crosshairTargetEnabled = false
 currentTime += 1
 renderCallback(1 / 60)
 assert(
     clicks == clicksBeforeSmoothAim,
-    "Trigger Bot must wait while smoothed Camera Aim is still converging"
+    "Trigger Bot must wait while smoothed Camera Aim has not reached the real reticle"
 )
-local smoothFrames = 0
-repeat
-    smoothFrames += 1
+local settlingRotation = cameraModule.Rotation
+state._crosshairTargetEnabled = true
+currentTime += 1 / 60
+renderCallback(1 / 60)
+assert(
+    clicks == clicksBeforeSmoothAim and cameraModule.Rotation ~= settlingRotation,
+    "Trigger Bot must not treat the target body under the reticle as a settled head plan"
+)
+for _ = 1, 600 do
+    if clicks > clicksBeforeSmoothAim then
+        break
+    end
     currentTime += 1 / 60
     renderCallback(1 / 60)
-until clicks > clicksBeforeSmoothAim or smoothFrames == 300
+end
 assert(
-    clicks == clicksBeforeSmoothAim + 1 and smoothFrames > 1,
-    "Trigger Bot must fire after smoothed Camera Aim reaches the target"
+    clicks == clicksBeforeSmoothAim + 1 and cameraModule.Rotation ~= settlingRotation,
+    "Trigger Bot must fire only after smoothed Camera Aim reaches its planned hit location"
 )
 clicks = clicksBeforeSmoothAim
 settings.aimSmoothness = 0
@@ -3201,12 +3417,16 @@ fighterModule.LocalFighter.Data.IsInShootingRange = true
 target.screenDistance = 4
 observations[1].screenDistance = 4
 rangeObservation.screenDistance = 4
+state._nearestBeforeTrigger = #nearestOptions
 renderCallback()
 assert(
     clicks == lobbyClicks + 1,
-    "Trigger Bot without Camera Aim must take the nearest target, not an 8px reticle"
+    "Trigger Bot without Camera Aim must use the native crosshair target"
 )
-assert(nearestOptions[#nearestOptions].maxScreenDistance == nil)
+assert(
+    #nearestOptions == state._nearestBeforeTrigger,
+    "No-aim Trigger Bot must not select a nearby target"
+)
 
 for _, utilityName in ipairs({
     "Medkit",
@@ -3596,11 +3816,23 @@ for _ = 1, 3 do
     renderCallback(1 / 60)
 end
 assert(
-    clicks == humanShortyClicks + 3,
-    "Human Aim Trigger Bot must keep firing Shorty while its imperfect tracking stays inside the reticle envelope"
+    clicks == humanShortyClicks,
+    "Trigger Bot must not fire Shorty while Human Aim remains off the planned headshot"
+)
+settings.aimSmoothness = 0
+for _ = 1, 300 do
+    if clicks > humanShortyClicks then
+        break
+    end
+    currentTime += 1 / 60
+    renderCallback(1 / 60)
+end
+assert(
+    clicks == humanShortyClicks + 1,
+    "Trigger Bot must fire Shorty once Camera Aim reaches the planned headshot"
 )
 fighterModule.LocalFighter.Data.IsInShootingRange = true
-settings.silentAim = false
+settings.silentAim = true
 settings.humanAim = false
 settings.headshotRate = 0
 settings.aimSmoothness = 0
@@ -3626,7 +3858,13 @@ local bowAimStarts = aimClicks
 renderCallback()
 assert(
     aimClicks == bowAimStarts + 1 and aimReleases == 0 and presses == 0,
-    "Bow Trigger Bot must begin charging through the held aiming action"
+    ("Bow Trigger Bot must begin charging through the held aiming action (starts=%d, aimClicks=%d, aimReleases=%d, presses=%d, stage=%s)"):format(
+        bowAimStarts,
+        aimClicks,
+        aimReleases,
+        presses,
+        tostring(adapter.taskDebug.triggerStage)
+    )
 )
 currentTime += 0.9
 renderCallback()
@@ -3666,7 +3904,7 @@ do
     currentTime += 1
     renderCallback()
     assert(
-        rangeObservation.health == math.huge and rangeObservation.maxHealth == math.huge,
+        rangeObservation.health == 150 and rangeObservation.maxHealth == 150,
         "Infinite-health practice dummies must expose representative full player health"
     )
     assert(
@@ -3680,6 +3918,7 @@ do
     rangeObservation.screenDistance = practiceDummyScreenDistance
     rangeObservation.part = nil
 end
+settings.silentAim = false
 
 do
     localItem.Name = "Revolver"
@@ -3776,8 +4015,14 @@ observations[1].screenDistance = 40
 rangeObservation.screenDistance = 40
 renderCallback()
 assert(
+    releases == flamethrowerReleases,
+    "Held automatic fire must tolerate one brief native-reticle observation gap"
+)
+currentTime += 0.11
+renderCallback()
+assert(
     releases == flamethrowerReleases + 1,
-    "Held automatic fire must release immediately when no target is inside the trigger radius"
+    "Held automatic fire must release after the native-reticle grace period"
 )
 target.screenDistance = 4
 observations[1].screenDistance = 4
@@ -3802,19 +4047,35 @@ renderCallback(1 / 60)
 settings.humanAim = true
 settings.aimSmoothness = 100
 settings.triggerBot = true
-local slingshotRotation = RivalsTargeting.rotationToward(origin, runtimeAimHead.Position)
+local slingshotRotation = RivalsTargeting.rotationToward(origin, runtimeAimRoot.Position)
 cameraModule.Rotation = slingshotRotation + Vector2.new(0, math.rad(20))
 local slingshotClicks = clicks
+state._slingshotSolves = slingshotSolves
+observations[1].screenDistance = 220
+rangeObservation.screenDistance = 220
+for _ = 1, 5 do
+    currentTime += 1 / 60
+    renderCallback(1 / 60)
+end
+assert(
+    clicks == slingshotClicks
+        and slingshotSolves == state._slingshotSolves
+        and cameraModule.Rotation == slingshotRotation + Vector2.new(0, math.rad(20)),
+    "Aim Assist must not acquire or steer toward a Slingshot target far from the crosshair"
+)
+observations[1].screenDistance = 4
+rangeObservation.screenDistance = 4
+cameraModule.Rotation = slingshotRotation + Vector2.new(0, math.rad(1.5))
 local slingshotFrames = 0
 repeat
     slingshotFrames += 1
     currentTime += 1 / 60
     renderCallback(1 / 60)
-until clicks > slingshotClicks or slingshotFrames == 180
-assert(slingshotSolves >= 1, "Human Aim must calculate a verified Slingshot bounce immediately")
+until clicks > slingshotClicks or slingshotFrames == 60
+assert(slingshotSolves > state._slingshotSolves, "Aim Assist must verify a nearby Slingshot path")
 assert(
-    clicks == slingshotClicks + 1 and slingshotFrames > 1 and slingshotFrames <= 30,
-    ("Human Aim must release a verified Slingshot path promptly (took %d frames)"):format(
+    clicks == slingshotClicks + 1 and slingshotFrames >= 20 and slingshotFrames < 60,
+    ("Aim Assist must finish a nearby verified Slingshot correction without snapping (took %d frames)"):format(
         slingshotFrames
     )
 )
@@ -4150,6 +4411,23 @@ assert(
     nearestOptions[#nearestOptions].maxScreenDistance == nil,
     "Inherent PvP farming must acquire opponents outside the configured manual FOV"
 )
+settings.humanAim = true
+cameraModule.Rotation = Vector2.zero
+renderCallback()
+assert(
+    cameraModule.Rotation ~= Vector2.zero
+        and nearestOptions[#nearestOptions].maxScreenDistance == nil,
+    "Task farming with Human Aim enabled must still acquire visible opponents outside manual FOV"
+)
+settings.humanAim = false
+settings.shotAim = true
+cameraModule.Rotation = Vector2.zero
+renderCallback()
+assert(
+    cameraModule.Rotation ~= Vector2.zero,
+    "Task farming must visibly aim instead of letting Silent Aim mask its camera steering"
+)
+settings.shotAim = false
 taskCombatActive = false
 taskActivityChanged()
 settings.fov = 180

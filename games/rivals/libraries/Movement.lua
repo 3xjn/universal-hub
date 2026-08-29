@@ -1,5 +1,17 @@
+local TaskLocomotion = require("../tasks/TaskLocomotion")
+local WeaponPolicy = require("./WeaponPolicy")
+
 local Movement = {}
 Movement.__index = Movement
+
+function Movement.isBlockingSurface(result, maximumSlopeAngle)
+    if result == nil then
+        return false
+    end
+    return typeof(result.Normal) ~= "Vector3"
+        or type(maximumSlopeAngle) ~= "number"
+        or result.Normal.Y < math.cos(math.rad(maximumSlopeAngle))
+end
 
 function Movement.new(options)
     assert(options and options.controlsController, "RIVALS movement requires ControlsController")
@@ -25,9 +37,12 @@ function Movement.new(options)
         mechanicsController = options.mechanicsController,
         movement = nil,
         movementDirection = options.movementDirection,
+        taskGroundProbe = options.taskGroundProbe,
+        taskLocomotion = options.taskLocomotion or TaskLocomotion.new(),
         taskObstacleProbe = options.taskObstacleProbe,
         taskParkourProbe = options.taskParkourProbe,
         taskLineOfSightBlocked = options.taskLineOfSightBlocked,
+        taskWeaponProfile = options.taskWeaponProfile or WeaponPolicy.movementProfile,
         wallNoclipModel = nil,
         wallNoclipConnection = nil,
         wallNoclipParts = {},
@@ -35,14 +50,24 @@ function Movement.new(options)
         taskCrouching = false,
         taskCrouchAt = 0,
         taskMobilityAt = 0,
+        taskMobilityDeadline = 0,
+        taskMobilityGeneration = 0,
         taskMobilityPhase = nil,
+        taskSlideCallGeneration = nil,
         taskParkourAt = 0,
         taskParkourCommit = nil,
+        taskParkourDirection = nil,
+        taskParkourObservation = nil,
+        taskParkourObservedAt = 0,
+        taskParkourObservedPosition = nil,
         taskProgressAt = 0,
         taskProgressPosition = nil,
+        taskRouteObservedAt = 0,
+        taskRouteObservedPosition = nil,
+        taskRouteTargetKey = nil,
+        taskRoutes = {},
         taskOwnsSlide = false,
         taskStrafeSign = 1,
-        taskStrafeUntil = 0,
         shouldSuppressJump = options.shouldSuppressJump,
         spawn = options.spawn or task.spawn,
         syntheticInputs = {},
@@ -185,6 +210,7 @@ local function taskHazardRepulsion(position, hazards)
 end
 
 function Movement:stopTaskCombat()
+    self.taskMobilityGeneration += 1
     local humanoid = self.taskHumanoid
     self.taskHumanoid = nil
     if self.taskCrouching and type(self.mechanicsController.SetCrouching) == "function" then
@@ -198,16 +224,30 @@ function Movement:stopTaskCombat()
     self.taskOwnsSlide = false
     self.taskMobilityPhase = nil
     self.taskMobilityAt = 0
+    self.taskMobilityDeadline = 0
     self.taskParkourAt = 0
     self.taskParkourCommit = nil
+    self.taskParkourDirection = nil
+    self.taskParkourObservation = nil
+    self.taskParkourObservedAt = 0
+    self.taskParkourObservedPosition = nil
     self.taskProgressAt = 0
     self.taskProgressPosition = nil
+    self.taskRouteObservedAt = 0
+    self.taskRouteObservedPosition = nil
+    self.taskRouteTargetKey = nil
+    table.clear(self.taskRoutes)
+    if self.taskLocomotion and type(self.taskLocomotion.reset) == "function" then
+        self.taskLocomotion:reset()
+    end
     if humanoid and type(humanoid.Move) == "function" then
         pcall(humanoid.Move, humanoid, Vector3.zero, false)
     end
 end
 
-function Movement:updateTaskCombat(targetPosition, hazards, tactical, locomotionPlan)
+function Movement:updateTaskCombat(targetPosition, hazards, tactical)
+    local target = type(targetPosition) == "table" and targetPosition or nil
+    targetPosition = target and target.position or targetPosition
     local fighter = self.getFighter()
     local entity = fighter and fighter.Entity
     local humanoid = entity and entity.Humanoid
@@ -230,92 +270,196 @@ function Movement:updateTaskCombat(targetPosition, hazards, tactical, locomotion
     self.taskHumanoid = humanoid
     local repulsion, hazardNearby = taskHazardRepulsion(root.Position, hazards)
     if typeof(targetPosition) ~= "Vector3" then
-        if self.taskCrouching and type(self.mechanicsController.SetCrouching) == "function" then
-            pcall(self.mechanicsController.SetCrouching, self.mechanicsController, false)
-            self.taskCrouching = false
+        local commit = self.taskParkourCommit
+        if commit and typeof(commit.landing) == "Vector3" then
+            targetPosition = commit.landing
+        else
+            if self.taskCrouching and type(self.mechanicsController.SetCrouching) == "function" then
+                pcall(self.mechanicsController.SetCrouching, self.mechanicsController, false)
+                self.taskCrouching = false
+            end
+            humanoid:Move(repulsion.Magnitude > 0.01 and repulsion.Unit or Vector3.zero, false)
+            return {
+                grounded = nil,
+                mobilityPhase = self.taskMobilityPhase,
+                needsDoubleJump = false,
+            }
         end
-        humanoid:Move(repulsion.Magnitude > 0.01 and repulsion.Unit or Vector3.zero, false)
-        return
+    end
+    local now = self.clock()
+    local grounded
+    if type(fighter.IsGrounded) == "function" then
+        local succeeded, result = pcall(fighter.IsGrounded, fighter)
+        if succeeded and type(result) == "boolean" then
+            grounded = result
+        end
+    elseif type(humanoid.FloorMaterial) == "EnumItem" then
+        grounded = humanoid.FloorMaterial ~= Enum.Material.Air
     end
     local offset =
         Vector3.new(targetPosition.X - root.Position.X, 0, targetPosition.Z - root.Position.Z)
     local distance = offset.Magnitude
     if distance < 0.01 then
+        local commit = self.taskParkourCommit
+        local elapsed = commit and now - commit.startedAt or 0
+        if commit and grounded ~= true then
+            local velocity = root.AssemblyLinearVelocity
+            local info = fighter.EquippedItem and fighter.EquippedItem.Info
+            if
+                grounded == false
+                and typeof(velocity) == "Vector3"
+                and velocity.Y < -1
+                and not commit.usedDoubleJump
+                and type(info) == "table"
+                and type(info.MaxDoubleJumps) == "number"
+                and info.MaxDoubleJumps > 0
+                and type(self.mechanicsController.DoubleJumpRequest) == "function"
+            then
+                pcall(self.mechanicsController.DoubleJumpRequest, self.mechanicsController)
+                commit.usedDoubleJump = true
+                self.taskMobilityPhase = "doubleJump"
+            end
+            humanoid:Move(Vector3.zero, false)
+            return {
+                grounded = grounded,
+                mobilityPhase = self.taskMobilityPhase,
+                needsDoubleJump = true,
+            }
+        end
+        if not commit or elapsed > 0.18 then
+            self.taskParkourCommit = nil
+            self.taskParkourDirection = nil
+        end
         humanoid:Move(Vector3.zero, false)
-        return
+        return {
+            grounded = grounded,
+            mobilityPhase = self.taskMobilityPhase,
+            needsDoubleJump = self.taskParkourCommit ~= nil,
+        }
     end
     local toward = offset.Unit
-    local now = self.clock()
-    local grounded = false
-    if type(fighter.IsGrounded) == "function" then
-        local succeeded, result = pcall(fighter.IsGrounded, fighter)
-        grounded = succeeded and result == true
-    elseif type(humanoid.FloorMaterial) == "EnumItem" then
-        grounded = humanoid.FloorMaterial ~= Enum.Material.Air
-    end
-    local pushSniper = type(tactical) == "table" and tactical.pushSniper == true
-    if now >= self.taskStrafeUntil then
-        self.taskStrafeSign = -self.taskStrafeSign
-        self.taskStrafeUntil = now + (pushSniper and 0.48 or 1.25)
-    end
-    local strafe = Vector3.new(-toward.Z, 0, toward.X) * self.taskStrafeSign
-    local item = fighter and fighter.EquippedItem
-    local info = item and item.Info
-    local sustainedRifle = type(info) == "table"
-        and info.Type == "Gun"
-        and info.IsRaycast == true
-        and type(info.ShootCooldown) == "number"
-        and info.ShootCooldown <= 0.15
-        and type(info.MaxAmmo) == "number"
-        and info.MaxAmmo >= 15
-    local lineBlocked = type(self.taskLineOfSightBlocked) == "function"
-        and self.taskLineOfSightBlocked(root.Position, targetPosition, fighter) == true
-    local avoidSniperPeek = type(tactical) == "table" and tactical.avoidSniperPeek == true
-    local direction
-    if pushSniper and distance < 7 then
-        direction = (-toward * 0.75 + strafe * 0.65).Unit
-    elseif avoidSniperPeek and not lineBlocked then
-        -- Close through a hard lateral angle while the sniper is holding scope.
-        direction = (toward * 0.12 + strafe).Unit
-    elseif pushSniper and lineBlocked then
-        -- Geometry is safety: use it to collapse distance rather than staying tucked.
-        direction = (toward * 0.9 + strafe * 0.3).Unit
-    elseif pushSniper then
-        direction = (toward * 0.88 + strafe * 0.48).Unit
-    elseif lineBlocked then
-        -- Commit to one side of cover long enough to round the corner instead
-        -- of oscillating against it, while retaining a little forward pressure.
-        direction = (toward * 0.25 + strafe).Unit
-    elseif sustainedRifle and distance > 52 then
-        direction = (toward * 0.72 + strafe * 0.7).Unit
-    elseif sustainedRifle and distance < 28 then
-        direction = (-toward * 0.82 + strafe * 0.58).Unit
-    elseif sustainedRifle then
-        -- Assault rifles are strongest when holding the falloff edge and
-        -- slicing the angle, rather than collapsing into melee distance.
-        direction = (-toward * 0.12 + strafe).Unit
-    elseif distance > 20 then
-        direction = (toward * 0.82 + strafe * 0.58).Unit
-    elseif distance < 8 then
-        direction = (-toward * 0.8 + strafe * 0.6).Unit
-    else
-        direction = (toward * 0.35 + strafe).Unit
-    end
-    if repulsion.Magnitude > 0.01 then
-        direction = (direction + repulsion).Unit
-    end
-    if type(locomotionPlan) == "table" and typeof(locomotionPlan.direction) == "Vector3" then
-        direction = locomotionPlan.direction
-        if repulsion.Magnitude > 0.01 then
-            direction = (direction + repulsion).Unit
+
+    local clear
+    if type(self.taskObstacleProbe) == "function" then
+        local succeeded, blocked = pcall(self.taskObstacleProbe, root.Position, toward, fighter)
+        if succeeded and type(blocked) == "boolean" then
+            clear = not blocked
         end
     end
-    local parkour
-    if type(self.taskParkourProbe) == "function" then
-        parkour = self.taskParkourProbe(root.Position, direction, fighter)
+    local lineBlocked
+    if type(self.taskLineOfSightBlocked) == "function" then
+        local succeeded, blocked =
+            pcall(self.taskLineOfSightBlocked, root.Position, targetPosition, fighter)
+        if succeeded and type(blocked) == "boolean" then
+            lineBlocked = blocked
+        end
     end
-    local obstacleBlocked = type(self.taskObstacleProbe) == "function"
-        and self.taskObstacleProbe(root.Position, direction, fighter)
+
+    local routes = self.taskRoutes
+    local routesKnown = grounded and type(self.taskGroundProbe) == "function"
+    local routeTargetKey = target and target.key or "anonymous"
+    local routeMoved = self.taskRouteObservedPosition
+        and (root.Position - self.taskRouteObservedPosition).Magnitude > 2.5
+    local sampleRoutes = routesKnown
+        and (now >= self.taskRouteObservedAt
+            or routeMoved
+            or self.taskRouteTargetKey ~= routeTargetKey)
+    if sampleRoutes then
+        routes = {}
+        local left = Vector3.new(-toward.Z, 0, toward.X)
+        for _, candidate in ipairs({
+            { key = "forward", direction = toward },
+            { key = "forwardLeft", direction = (toward + left).Unit },
+            { key = "forwardRight", direction = (toward - left).Unit },
+            { key = "left", direction = left },
+            { key = "right", direction = -left },
+            { key = "retreatLeft", direction = (-toward + left).Unit },
+            { key = "retreatRight", direction = (-toward - left).Unit },
+            { key = "retreat", direction = -toward },
+        }) do
+            local succeeded, profile = pcall(
+                self.taskGroundProbe,
+                root.Position,
+                candidate.direction,
+                fighter,
+                targetPosition
+            )
+            if succeeded and type(profile) == "table" then
+                profile.direction = candidate.direction
+                profile.key = candidate.key
+                table.insert(routes, profile)
+            end
+        end
+        self.taskRoutes = routes
+        self.taskRouteObservedAt = now + 0.2
+        self.taskRouteObservedPosition = root.Position
+        self.taskRouteTargetKey = routeTargetKey
+    end
+
+    local item = fighter and fighter.EquippedItem
+    local weaponProfile: any = {}
+    if type(self.taskWeaponProfile) == "function" then
+        local succeeded, profile = pcall(self.taskWeaponProfile, item)
+        if succeeded and type(profile) == "table" then
+            weaponProfile = profile
+        end
+    end
+    local healthRatio = type(humanoid.Health) == "number"
+            and type(humanoid.MaxHealth) == "number"
+            and humanoid.MaxHealth > 0
+            and humanoid.Health / humanoid.MaxHealth
+        or nil
+    local locomotionPlan = self.taskLocomotion:plan({
+        clear = clear,
+        engagementSeed = target and target.engagementSeed,
+        grounded = grounded,
+        hazardDirection = repulsion.Magnitude > 0.01 and repulsion.Unit or nil,
+        healthRatio = healthRatio,
+        lineBlocked = lineBlocked,
+        now = now,
+        objective = target and target.objective,
+        position = root.Position,
+        routes = routes,
+        routesKnown = routesKnown,
+        tactical = tactical,
+        targetHealthRatio = target and target.targetHealthRatio,
+        targetKey = target and target.key,
+        targetPosition = targetPosition,
+        weaponProfile = weaponProfile,
+    })
+    local direction = locomotionPlan.direction
+    if grounded == nil then
+        direction = Vector3.zero
+        locomotionPlan.intent = "hold"
+        locomotionPlan.routeKey = "groundingUnknown"
+    end
+    self.taskStrafeSign = locomotionPlan.strafeSign or self.taskStrafeSign
+    local strafe = Vector3.new(-toward.Z, 0, toward.X) * self.taskStrafeSign
+    local sustainedRifle = weaponProfile.sustained == true
+    local avoidSniperPeek = type(tactical) == "table" and tactical.avoidSniperPeek == true
+    local parkour = self.taskParkourObservation
+    local parkourMoved = self.taskParkourObservedPosition
+        and (root.Position - self.taskParkourObservedPosition).Magnitude > 1.5
+    local parkourDirectionChanged = typeof(self.taskParkourDirection) ~= "Vector3"
+        or direction.Magnitude > 0.01
+            and self.taskParkourDirection:Dot(direction) < 0.96
+    if
+        type(self.taskParkourProbe) == "function"
+        and direction.Magnitude > 0.01
+        and (now >= self.taskParkourObservedAt or parkourMoved or parkourDirectionChanged)
+    then
+        local succeeded, profile = pcall(self.taskParkourProbe, root.Position, direction, fighter)
+        parkour = succeeded and type(profile) == "table" and profile or nil
+        self.taskParkourDirection = direction
+        self.taskParkourObservation = parkour
+        self.taskParkourObservedAt = now + 0.1
+        self.taskParkourObservedPosition = root.Position
+    end
+    local obstacleBlocked
+    if type(self.taskObstacleProbe) == "function" then
+        local succeeded, blocked = pcall(self.taskObstacleProbe, root.Position, direction, fighter)
+        obstacleBlocked = succeeded and type(blocked) == "boolean" and blocked or nil
+    end
     local performedParkour = false
     local commit = self.taskParkourCommit
     if commit then
@@ -332,8 +476,11 @@ function Movement:updateTaskCombat(targetPosition, hazards, tactical, locomotion
             -- safe-to-cancel-before-running rule.
             self.taskParkourCommit = nil
             commit = nil
-            direction = -toward
+            direction = Vector3.zero
             self.taskParkourAt = now + 0.5
+            if type(self.taskLocomotion.invalidate) == "function" then
+                self.taskLocomotion:invalidate()
+            end
         else
             if landingDistance > 0.05 then
                 direction = landingOffset.Unit
@@ -343,7 +490,7 @@ function Movement:updateTaskCombat(targetPosition, hazards, tactical, locomotion
             local descending = typeof(velocity) == "Vector3" and velocity.Y < -1
             local info = fighter.EquippedItem and fighter.EquippedItem.Info
             if
-                not grounded
+                grounded == false
                 and descending
                 and not commit.usedDoubleJump
                 and type(info) == "table"
@@ -356,6 +503,7 @@ function Movement:updateTaskCombat(targetPosition, hazards, tactical, locomotion
             end
         end
     end
+    local parkourRequestsSlideJump = false
     if not commit and now >= self.taskParkourAt and type(parkour) == "table" then
         if
             grounded
@@ -392,36 +540,21 @@ function Movement:updateTaskCombat(targetPosition, hazards, tactical, locomotion
                 self.taskParkourAt = now + 0.42
             end
         elseif grounded and parkour.middle and not parkour.high and parkour.landing then
-            if type(self.mechanicsController.HighJump) == "function" then
-                pcall(self.mechanicsController.HighJump, self.mechanicsController)
-                performedParkour = true
-                self.taskParkourAt = now + 0.7
-            end
+            parkourRequestsSlideJump = true
         elseif not parkour.landing then
             obstacleBlocked = true
         end
     end
-    if not commit and type(parkour) == "table" and not parkour.landing then
-        -- Baritone-style edge recovery: probe both lateral routes for ground and
-        -- retreat if neither side has a verified landing.
-        local left = strafe.Unit
-        local right = -left
-        local leftProfile = self.taskParkourProbe(root.Position, left, fighter)
-        local rightProfile = self.taskParkourProbe(root.Position, right, fighter)
-        if type(leftProfile) == "table" and leftProfile.landing then
-            direction = left
-        elseif type(rightProfile) == "table" and rightProfile.landing then
-            direction = right
-        else
-            direction = -toward
-        end
+    if
+        not commit
+        and (type(parkour) == "table" and not parkour.landing
+            or obstacleBlocked == true and not performedParkour)
+    then
+        direction = Vector3.zero
         obstacleBlocked = false
-    elseif obstacleBlocked and not performedParkour then
-        local side = strafe.Unit
-        if self.taskObstacleProbe(root.Position, side, fighter) then
-            side = -side
+        if type(self.taskLocomotion.invalidate) == "function" then
+            self.taskLocomotion:invalidate()
         end
-        direction = side
     end
     if self.taskProgressAt == 0 then
         self.taskProgressAt = now
@@ -435,56 +568,117 @@ function Movement:updateTaskCombat(targetPosition, hazards, tactical, locomotion
             and not progressed
             and distance > 10
             and now >= self.taskParkourAt
-            and not (type(parkour) == "table" and not parkour.landing)
         then
-            local recover = type(self.mechanicsController.JumpRequest) == "function"
-                    and self.mechanicsController.JumpRequest
-                or self.mechanicsController.Jump
-            if type(recover) == "function" then
-                pcall(recover, self.mechanicsController)
-                performedParkour = true
-                self.taskParkourAt = now + 0.8
-                self.taskStrafeSign = -self.taskStrafeSign
+            if type(self.taskLocomotion.invalidate) == "function" then
+                self.taskLocomotion:invalidate()
             end
+            self.taskParkourAt = now + 0.2
         end
         self.taskProgressAt = now
         self.taskProgressPosition = root.Position
     end
-    local shouldUseMobility = (locomotionPlan == nil or locomotionPlan.slide == true)
+    local shouldUseMobility = (locomotionPlan.slide == true or parkourRequestsSlideJump)
         and not performedParkour
         and not (type(parkour) == "table" and not parkour.landing)
         and not avoidSniperPeek
-        and not lineBlocked
         and not hazardNearby
-        and distance > 24
-    if self.taskMobilityPhase == "sliding" and now >= self.taskMobilityAt then
-        if type(self.mechanicsController.HighJump) == "function" then
-            pcall(self.mechanicsController.HighJump, self.mechanicsController)
+        and distance > 20
+    local function nativeSliding()
+        if type(self.mechanicsController.IsSliding) == "boolean" then
+            return self.mechanicsController.IsSliding
         end
-        self.taskOwnsSlide = false
-        self.taskMobilityPhase = nil
-        self.taskMobilityAt = now + 2.8
+        if type(fighter.IsSlidingLocally) == "function" then
+            local succeeded, result = pcall(fighter.IsSlidingLocally, fighter)
+            if succeeded and type(result) == "boolean" then
+                return result
+            end
+        end
+        return nil
+    end
+    if self.taskMobilityPhase == "awaitingSlide" then
+        local sliding = nativeSliding()
+        if sliding == true then
+            local succeeded, accepted = pcall(
+                self.mechanicsController.HighJump,
+                self.mechanicsController
+            )
+            if succeeded and accepted ~= false then
+                self.taskMobilityPhase = "awaitingAirborne"
+                self.taskMobilityDeadline = now + 0.5
+            else
+                if type(self.mechanicsController.StopSliding) == "function" then
+                    pcall(self.mechanicsController.StopSliding, self.mechanicsController)
+                end
+                self.taskOwnsSlide = false
+                self.taskMobilityPhase = nil
+                self.taskMobilityAt = now + 0.5
+            end
+        elseif now >= self.taskMobilityDeadline then
+            if self.taskOwnsSlide and type(self.mechanicsController.StopSliding) == "function" then
+                pcall(self.mechanicsController.StopSliding, self.mechanicsController)
+            end
+            self.taskOwnsSlide = false
+            self.taskMobilityPhase = nil
+            self.taskMobilityAt = now + 0.5
+        end
+    elseif self.taskMobilityPhase == "awaitingAirborne" then
+        local sliding = nativeSliding()
+        if grounded == false or sliding == false then
+            self.taskOwnsSlide = false
+            self.taskMobilityPhase = nil
+            self.taskMobilityAt = now + 2.1
+        elseif now >= self.taskMobilityDeadline then
+            if self.taskOwnsSlide and type(self.mechanicsController.StopSliding) == "function" then
+                pcall(self.mechanicsController.StopSliding, self.mechanicsController)
+            end
+            self.taskOwnsSlide = false
+            self.taskMobilityPhase = nil
+            self.taskMobilityAt = now + 0.5
+        end
     elseif not self.taskMobilityPhase and shouldUseMobility and now >= self.taskMobilityAt then
-        local canSlide = true
+        local canSlide = false
         if type(fighter.CanSlide) == "function" then
             local succeeded, result = pcall(fighter.CanSlide, fighter)
             canSlide = succeeded and result == true
         end
-        if canSlide and type(self.mechanicsController.Slide) == "function" then
+        if
+            canSlide
+            and self.taskSlideCallGeneration == nil
+            and type(self.mechanicsController.Slide) == "function"
+            and type(self.mechanicsController.HighJump) == "function"
+        then
             if self.taskCrouching and type(self.mechanicsController.SetCrouching) == "function" then
                 pcall(self.mechanicsController.SetCrouching, self.mechanicsController, false)
                 self.taskCrouching = false
             end
-            pcall(self.mechanicsController.Slide, self.mechanicsController)
+            self.taskMobilityGeneration += 1
+            local generation = self.taskMobilityGeneration
+            self.taskSlideCallGeneration = generation
             self.taskOwnsSlide = true
-            self.taskMobilityPhase = "sliding"
-            self.taskMobilityAt = now + 0.16
+            self.taskMobilityPhase = "awaitingSlide"
+            self.taskMobilityDeadline = now + 0.5
+            self.spawn(function()
+                if
+                    self.taskMobilityGeneration ~= generation
+                    or self.taskSlideCallGeneration ~= generation
+                then
+                    if self.taskSlideCallGeneration == generation then
+                        self.taskSlideCallGeneration = nil
+                    end
+                    return
+                end
+                pcall(self.mechanicsController.Slide, self.mechanicsController)
+                if self.taskSlideCallGeneration == generation then
+                    self.taskSlideCallGeneration = nil
+                end
+            end)
         else
             self.taskMobilityAt = now + 0.5
         end
     end
 
     local shouldCrouchSpam = sustainedRifle
+        and locomotionPlan.intent == "hold"
         and not avoidSniperPeek
         and self.taskMobilityPhase == nil
         and not lineBlocked
@@ -501,7 +695,22 @@ function Movement:updateTaskCombat(targetPosition, hazards, tactical, locomotion
         self.taskCrouching = false
         self.taskCrouchAt = now + 0.25
     end
+    local needsDoubleJump = type(parkour) == "table"
+            and typeof(parkour.jumpLanding) == "Vector3"
+        or commit ~= nil and grounded == false
     humanoid:Move(direction, false)
+    return {
+        clear = clear,
+        direction = direction,
+        distance = distance,
+        grounded = grounded,
+        intent = locomotionPlan.intent,
+        lineBlocked = lineBlocked,
+        mobilityPhase = self.taskMobilityPhase,
+        needsDoubleJump = needsDoubleJump,
+        routeKey = locomotionPlan.routeKey,
+        routes = routes,
+    }
 end
 
 function Movement:stopWallNoclip()

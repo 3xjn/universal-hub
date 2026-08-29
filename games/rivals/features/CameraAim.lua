@@ -2,14 +2,45 @@ local RICOCHET_CACHE_INTERVAL = 0.15
 local SPLASH_CACHE_INTERVAL = 0.1
 local SLINGSHOT_CACHE_INTERVAL = 0.2
 local SLINGSHOT_HUMAN_AIM_MAX_SMOOTHNESS = 65
+local DIRECT_PROJECTILE_SETTLE_ANGLE = math.rad(0.2)
+local HUMAN_AIM_MIN_RADIUS = 96
+local HUMAN_AIM_RADIUS_SPAN = 320
+local HUMAN_AIM_EDGE_STRENGTH = 0.22
 
 local CameraAim = {}
 CameraAim.__index = CameraAim
 
 function CameraAim.enabled(settings, shotOnly, taskCombatActive)
     settings = settings or {}
-    local cameraAimEnabled = settings.silentAim == true or taskCombatActive == true
+    if taskCombatActive == true and shotOnly ~= true then
+        return true
+    end
+    local cameraAimEnabled = settings.silentAim == true
     return shotOnly and settings.shotAim == true or (cameraAimEnabled and settings.shotAim ~= true)
+end
+
+function CameraAim.humanAimRadius(strength)
+    local normalized = math.clamp(type(strength) == "number" and strength or 60, 0, 100) / 100
+    return HUMAN_AIM_MIN_RADIUS + HUMAN_AIM_RADIUS_SPAN * normalized ^ 2
+end
+
+function CameraAim.humanAimStrengthScale(target, strength)
+    local screenDistance = target and target.screenDistance
+    if type(screenDistance) ~= "number" then
+        return 1
+    end
+    local normalized = math.clamp(screenDistance / CameraAim.humanAimRadius(strength), 0, 1)
+    local smoothStep = normalized * normalized * (3 - 2 * normalized)
+    return 1 - (1 - HUMAN_AIM_EDGE_STRENGTH) * smoothStep
+end
+
+function CameraAim.flickProjectiles(settings, item, chargedProjectile)
+    local info = item and item.Info
+    return settings and settings.silentAim == true and settings.flickProjectiles == true
+        and type(info) == "table"
+        and info.IsProjectile == true
+        and info.IsRaycast ~= true
+        and (chargedProjectile ~= true or item._is_charging == true)
 end
 
 function CameraAim.shouldClearRetention(
@@ -68,15 +99,26 @@ function CameraAim:align(ctx)
         end
         return nil
     end
-    local function settleAim(rotation, instant, character, maximumSmoothness)
-        if shotOnly then
+    local flickOnly = false
+    local humanStrengthScale = 1
+    local function settleAim(rotation, instant, character, maximumSmoothness, maximumError)
+        if shotOnly or flickOnly then
             return true
         end
-        return ctx.setAimRotation(rotation, instant, character, maximumSmoothness)
+        return ctx.setAimRotation(
+            rotation,
+            instant,
+            character,
+            maximumSmoothness,
+            maximumError,
+            humanStrengthScale
+        )
     end
 
     local fighter = ctx.fighter
     local item = fighter and fighter.EquippedItem
+    flickOnly = not shotOnly
+        and CameraAim.flickProjectiles(settings, item, WeaponPolicy.isChargedProjectile(item))
     local automationPolicy = WeaponPolicy.automationPolicy(item)
     local aimMode = shotOnly and "silentAim" or "cameraAim"
     if automationPolicy[aimMode] ~= true then
@@ -97,11 +139,18 @@ function CameraAim:align(ctx)
         ctx.rememberWeapon(item)
         local cameraAim = shotOnly ~= true
         if cameraAim and taskCombatActive ~= true then
-            target = ctx.selectTarget(nil, true, false, true)
+            target = ctx.selectTarget(
+                nil,
+                energyRifle or slingshot or splashProjectile,
+                false,
+                true
+            )
         else
             target = ctx.selectTarget(
                 nil,
                 energyRifle or slingshot or splashProjectile or taskCombatActive == true,
+                taskCombatActive == true,
+                false,
                 taskCombatActive == true
             )
         end
@@ -120,6 +169,9 @@ function CameraAim:align(ctx)
         end
         return nil
     end
+    if settings.humanAim == true and not shotOnly then
+        humanStrengthScale = CameraAim.humanAimStrengthScale(target, settings.aimAssistStrength)
+    end
     if taskDebug then
         taskDebug.aimStage = "target-selected"
         taskDebug.targetVisible = target.visible == true
@@ -132,22 +184,80 @@ function CameraAim:align(ctx)
 
     local cameraFrame = camera.GetRenderCFrame and camera:GetRenderCFrame() or camera.CFrame
     local origin = cameraFrame.Position
+    if
+        not shotOnly
+        and not knife
+        and not energyRifle
+        and not slingshot
+        and not splashProjectile
+        and target.visible ~= true
+        and taskCombatActive ~= true
+    then
+        local raycast
+        if target.offscreen == true and type(ctx.environmentRaycast) == "function" then
+            local factorySucceeded, candidate = pcall(ctx.environmentRaycast)
+            raycast = factorySucceeded and candidate or nil
+        end
+        local succeeded, obstruction = false, nil
+        if type(raycast) == "function" and typeof(target.position) == "Vector3" then
+            succeeded, obstruction = pcall(raycast, origin, target.position - origin)
+        end
+        if not succeeded or obstruction ~= nil then
+            ctx.clearTargetKey()
+            return nil
+        end
+    end
+
     local now = ctx.clock()
+    local taskOffscreenPathClear = false
+    if
+        not shotOnly
+        and not knife
+        and taskCombatActive == true
+        and target.visible ~= true
+        and target.offscreen == true
+        and typeof(target.position) == "Vector3"
+        and type(ctx.environmentRaycast) == "function"
+    then
+        local factorySucceeded, raycast = pcall(ctx.environmentRaycast)
+        local raySucceeded, obstruction = false, nil
+        if factorySucceeded and type(raycast) == "function" then
+            raySucceeded, obstruction = pcall(raycast, origin, target.position - origin)
+        end
+        taskOffscreenPathClear = raySucceeded and obstruction == nil
+    end
+    if
+        not shotOnly
+        and not knife
+        and taskCombatActive == true
+        and target.visible ~= true
+        and not taskOffscreenPathClear
+    then
+        local aligned = table.clone(target)
+        aligned.aimSettled = false
+        aligned.navigationOnly = true
+        if taskDebug then
+            taskDebug.aimStage = "navigation-only"
+            taskDebug.aimSettled = false
+        end
+        return aligned
+    end
     if
         not shotOnly
         and not knife
         and target.visible ~= true
+        and target.offscreen == true
         and typeof(target.position) == "Vector3"
     then
         local aligned = table.clone(target)
         aligned.aimSettled = settleAim(
             Targeting.rotationToward(origin, target.position),
-            taskCombatActive == true,
+            false,
             target.character
         )
-        aligned.navigationOnly = taskCombatActive == true
+        aligned.navigationOnly = false
         if taskDebug then
-            taskDebug.aimStage = taskCombatActive == true and "navigation-only" or "off-screen"
+            taskDebug.aimStage = "off-screen"
             taskDebug.aimSettled = aligned.aimSettled
         end
         return aligned
@@ -285,11 +395,14 @@ function CameraAim:align(ctx)
             ctx.gravity,
             shotOnly and ctx.renderDelta or 0
         )
-        if solution then
+        local raycast = type(ctx.environmentRaycast) == "function" and ctx.environmentRaycast()
+        if solution and ProjectileAim.directPathClear(solution, item.Info, raycast, ctx.gravity) then
             local aimSettled = settleAim(
                 Targeting.rotationToward(origin, origin + solution.direction),
                 false,
-                target.character
+                target.character,
+                nil,
+                DIRECT_PROJECTILE_SETTLE_ANGLE
             )
             local aligned = {}
             for key, value in pairs(target) do

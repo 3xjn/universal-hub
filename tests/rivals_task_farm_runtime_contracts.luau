@@ -120,8 +120,109 @@ assert(runtime:isCombatActive())
 assert(activity[#activity] == true, "RoundStarted must wake Adapter frame ownership")
 runtime:stop()
 assert(not runtime:isCombatActive() and runtime:status().state == "stopped")
+assert(leaveCalls == 2, "stopping must cancel an accepted task-owned queue")
 assert(activity[#activity] == false, "stop must publish combat deactivation")
 assert(signals.Tasks:count() == 0 and signals.BeginnerTasksCompleted:count() == 0)
+
+fighter.Data.IsInDuel = false
+fighter.Data.IsInShootingRange = true
+local rangeLeaves, rangeQueues = 0, 0
+local rangeRuntime = Runtime.new({
+    taskLibrary = {
+        TASKS_DATA_NAMES = { "Tasks" },
+        Info = { Beginner7 = { Title = "Play a duel", Goal = 1 } },
+    },
+    playerDataController = data,
+    matchmakingController = {
+        QueueInto = function()
+            rangeQueues += 1
+            return "Success"
+        end,
+    },
+    fighterController = { LocalFighter = fighter },
+    duelController = { GetDuel = function() return nil end },
+    leaveRange = function()
+        rangeLeaves += 1
+        return true
+    end,
+})
+assert(
+    rangeLeaves == 1 and rangeQueues == 0 and rangeRuntime:status().state == "range-leaving",
+    "a PvP task must leave the shooting range before it queues"
+)
+fighter.Data.IsInShootingRange = false
+fighterSignal:Fire()
+assert(rangeQueues == 1, "queueing must begin after native range-exit confirmation")
+rangeRuntime:stop()
+
+fighter.Data.IsInShootingRange = true
+local yieldingLeaves = 0
+local yieldingRangeRuntime = Runtime.new({
+    taskLibrary = {
+        TASKS_DATA_NAMES = { "Tasks" },
+        Info = { Beginner7 = { Title = "Play a duel", Goal = 1 } },
+    },
+    playerDataController = data,
+    matchmakingController = { QueueInto = function() error("range exit must finish first") end },
+    fighterController = { LocalFighter = fighter },
+    duelController = { GetDuel = function() return nil end },
+    paused = true,
+    leaveRange = function()
+        yieldingLeaves += 1
+        if yieldingLeaves == 1 then
+            coroutine.yield()
+        end
+        return true
+    end,
+})
+local yieldingResume = coroutine.create(function()
+    yieldingRangeRuntime:resume()
+end)
+assert(coroutine.resume(yieldingResume))
+assert(yieldingRangeRuntime.rangeExitPending == true, "native range exit may yield")
+yieldingRangeRuntime:pause("user")
+assert(coroutine.resume(yieldingResume))
+assert(
+    yieldingRangeRuntime:status().paused
+        and yieldingRangeRuntime:status().state == "paused"
+        and yieldingRangeRuntime.rangeExitRequested == false,
+    "a stale yielding range exit must not overwrite pause state"
+)
+yieldingRangeRuntime:resume()
+assert(
+    yieldingLeaves == 2 and yieldingRangeRuntime:status().state == "range-leaving",
+    "resume must retry an interrupted range exit"
+)
+yieldingRangeRuntime:stop()
+fighter.Data.IsInShootingRange = false
+
+local unknownQueues, unknownLeaves = 0, 0
+local unknownRuntime = Runtime.new({
+    taskLibrary = {
+        TASKS_DATA_NAMES = { "Tasks" },
+        Info = { Beginner7 = { Title = "Play a duel", Goal = 1 } },
+    },
+    playerDataController = data,
+    matchmakingController = {
+        QueueInto = function()
+            unknownQueues += 1
+            return "Success"
+        end,
+    },
+    fighterController = { LocalFighter = {} },
+    duelController = { GetDuel = function() return nil end },
+    leaveRange = function()
+        unknownLeaves += 1
+        return true
+    end,
+})
+assert(
+    unknownRuntime:status().state == "native-waiting"
+        and unknownQueues == 0
+        and unknownLeaves == 0,
+    "unknown fighter and range state must not manufacture a queue-ready state"
+)
+unknownRuntime:stop()
 
 local raceRuntime
 local raceLeaves = 0
@@ -266,6 +367,92 @@ assert(
 )
 gameOverRuntime:stop()
 
+fighter.Data.IsInShootingRange = nil
+duel.Data.Status = "RoundStarted"
+local nilRangeCombat = Runtime.new({
+    taskLibrary = {
+        TASKS_DATA_NAMES = { "Tasks" },
+        Info = { Beginner7 = { Title = "Play a duel", Goal = 1 } },
+    },
+    playerDataController = requeueData,
+    matchmakingController = { QueueInto = function() error("active combat must not queue") end },
+    fighterController = { LocalFighter = fighter },
+    duelController = { GetDuel = function() return duel end },
+    context = { isMatchmadeDuel = function() return true end },
+})
+assert(
+    nilRangeCombat:status().state == "combat",
+    "an unavailable range flag must not disable an active duel"
+)
+nilRangeCombat:stop()
+
+local fallbackRequeue
+local gameOverFallback = Runtime.new({
+    taskLibrary = {
+        TASKS_DATA_NAMES = { "Tasks" },
+        Info = { Beginner7 = { Title = "Play a duel", Goal = 1 } },
+    },
+    playerDataController = requeueData,
+    matchmakingController = {
+        IsMatchmadeDuelOver = function() return true end,
+        QueueInto = function(_, name)
+            fallbackRequeue = name
+            return "Success"
+        end,
+    },
+    fighterController = { LocalFighter = fighter },
+    duelController = { GetDuel = function() return nil end },
+    context = { isMatchmadeDuel = function() return true end },
+    constants = { BEGINNER_QUEUE_NAME = "beginner", BEGINNER_QUEUE_WINS = 5 },
+})
+assert(
+    fallbackRequeue == "beginner" and gameOverFallback:status().state == "queued",
+    "native matchmade GameOver evidence must requeue even after the duel replica disappears"
+)
+gameOverFallback:stop()
+
+local transitionEnded = signal()
+local transitionDuel = duel
+local transitionOver = false
+local transitionRequeue
+fighter.Data.IsInDuel = true
+duel.Data.Status = "RoundStarted"
+local gameOverTransition = Runtime.new({
+    taskLibrary = {
+        TASKS_DATA_NAMES = { "Tasks" },
+        Info = { Beginner7 = { Title = "Play a duel", Goal = 1 } },
+    },
+    playerDataController = requeueData,
+    matchmakingController = {
+        MatchmadeDuelEnded = transitionEnded,
+        IsMatchmadeDuelOver = function()
+            return transitionOver
+        end,
+        QueueInto = function(_, name)
+            transitionRequeue = name
+            return "Success"
+        end,
+    },
+    fighterController = { LocalFighter = fighter },
+    duelController = {
+        GetDuel = function()
+            return transitionDuel
+        end,
+    },
+    context = { isMatchmadeDuel = function() return true end },
+    constants = { BEGINNER_QUEUE_NAME = "beginner", BEGINNER_QUEUE_WINS = 5 },
+})
+assert(gameOverTransition:status().state == "combat")
+transitionDuel = nil
+transitionOver = true
+transitionEnded:Fire()
+assert(
+    transitionRequeue == "beginner" and gameOverTransition:status().state == "queued",
+    "native matchmade end signal must wake requeue when the duel replica disappears"
+)
+gameOverTransition:stop()
+fighter.Data.IsInShootingRange = false
+
 local manualPauseRequests = 0
 local manualQueueCalls = 0
 fighter.Data.IsInDuel = true
@@ -294,6 +481,15 @@ local manualRuntime = Runtime.new({
         QueueInto = function()
             manualQueueCalls += 1
             return "Success"
+        end,
+        Get = function(_, key)
+            if key == "MatchmadeStatus" then
+                return ""
+            elseif key == "MatchmadeGameOver" then
+                return false
+            elseif key == "MatchmadeConnectedPlayers" then
+                return {}
+            end
         end,
     },
     fighterController = { LocalFighter = fighter },
@@ -332,6 +528,18 @@ fighterSignal:Fire()
 assert(
     not manualRuntime:status().paused and manualPauseRequests == 1,
     "round or fighter updates must not re-pause after the user unpauses"
+)
+fighter.Data.IsInDuel = nil
+fighterSignal:Fire()
+assert(
+    not manualRuntime:status().paused and manualRuntime:status().state == "native-waiting",
+    "temporary unknown duel state must fail closed without forgetting the active duel"
+)
+fighter.Data.IsInDuel = true
+fighterSignal:Fire()
+assert(
+    not manualRuntime:status().paused and manualPauseRequests == 1,
+    "native state recovery inside the same manual duel must not auto-pause again"
 )
 duel.Data.Status = "GameOver"
 duelSignal:Fire()

@@ -11,6 +11,7 @@ local DEFAULTS = {
     chamsPerPart = false,
     cameraFov = 180,
     cameraFullScreenAim = false,
+    cameraTargetMode = "radius",
     fov = 180,
     fovCircle = true,
     -- Legacy shared palette remains for config migration; relationship-specific
@@ -58,6 +59,7 @@ local DEFAULTS = {
     alwaysScoped = false,
     shotFov = 180,
     shotFullScreenAim = false,
+    shotTargetMode = "radius",
     shotAim = false,
     showEnemies = true,
     showTeammates = false,

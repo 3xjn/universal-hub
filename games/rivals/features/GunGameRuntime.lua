@@ -23,6 +23,18 @@ function GunGameRuntime.pickupType(instance)
     return nil
 end
 
+local function itemValue(item, key)
+    if type(item and item.Get) == "function" then
+        local succeeded, value = pcall(item.Get, item, key)
+        if succeeded and type(value) == "number" then
+            return value
+        end
+    end
+    local data = item and item.Data
+    local value = type(data) == "table" and data[key] or nil
+    return type(value) == "number" and value or nil
+end
+
 function GunGameRuntime.shouldCollect(kind, fighter)
     if kind == "Health" then
         local entity = fighter and fighter.Entity
@@ -37,21 +49,22 @@ function GunGameRuntime.shouldCollect(kind, fighter)
         return false
     end
     local item = fighter and fighter.EquippedItem
-    local data = item and item.Data
     local info = item and item.Info
-    if type(data) ~= "table" or type(info) ~= "table" then
+    if type(info) ~= "table" then
         return item ~= nil
     end
     local knownCapacity = false
-    if type(data.Ammo) == "number" and type(info.MaxAmmo) == "number" then
+    local ammo = itemValue(item, "Ammo")
+    if ammo and type(info.MaxAmmo) == "number" then
         knownCapacity = true
-        if data.Ammo < info.MaxAmmo then
+        if ammo < info.MaxAmmo then
             return true
         end
     end
-    if type(data.AmmoReserve) == "number" and type(info.MaxAmmoReserve) == "number" then
+    local reserve = itemValue(item, "AmmoReserve")
+    if reserve and type(info.MaxAmmoReserve) == "number" then
         knownCapacity = true
-        if data.AmmoReserve < info.MaxAmmoReserve then
+        if reserve < info.MaxAmmoReserve then
             return true
         end
     end
@@ -66,6 +79,7 @@ function GunGameRuntime.new(options)
 
     local self = setmetatable({
         attemptedAt = setmetatable({}, { __mode = "k" }),
+        candidateConnections = {},
         candidates = {},
         clock = options.clock or os.clock,
         connections = {},
@@ -82,16 +96,42 @@ function GunGameRuntime.new(options)
         workspace = options.workspace,
     }, GunGameRuntime)
 
+    local function disconnectCandidate(candidate)
+        local connection = self.candidateConnections[candidate]
+        if connection and type(connection.Disconnect) == "function" then
+            connection:Disconnect()
+        end
+        self.candidateConnections[candidate] = nil
+    end
+    local function classifyCandidate(candidate)
+        local kind = GunGameRuntime.pickupType(candidate)
+        if not kind then
+            return false
+        end
+        self.candidates[candidate] = kind
+        disconnectCandidate(candidate)
+        return true
+    end
     local function addCandidate(candidate)
-        if self.stopped then
+        if self.stopped or classifyCandidate(candidate) then
             return
         end
-        local kind = GunGameRuntime.pickupType(candidate)
-        if kind then
-            self.candidates[candidate] = kind
+        if
+            candidate
+            and candidate.Name == "_drop"
+            and type(candidate.IsA) == "function"
+            and candidate:IsA("BasePart")
+            and candidate.ChildAdded
+            and type(candidate.ChildAdded.Connect) == "function"
+            and not self.candidateConnections[candidate]
+        then
+            self.candidateConnections[candidate] = candidate.ChildAdded:Connect(function()
+                classifyCandidate(candidate)
+            end)
         end
     end
     local function removeCandidate(candidate)
+        disconnectCandidate(candidate)
         self.candidates[candidate] = nil
         self.attemptedAt[candidate] = nil
     end
@@ -155,10 +195,10 @@ function GunGameRuntime:update()
                 if self.stopped or candidate.Parent ~= self.workspace then
                     return
                 end
-                local touched = pcall(self.fireTouchInterest, touchPart, candidate, 1)
+                local touched = pcall(self.fireTouchInterest, touchPart, candidate, 0)
                 if touched then
                     self.wait()
-                    pcall(self.fireTouchInterest, touchPart, candidate, 0)
+                    pcall(self.fireTouchInterest, touchPart, candidate, 1)
                 end
             end)
         end
@@ -175,7 +215,13 @@ function GunGameRuntime:stop()
             connection:Disconnect()
         end
     end
+    for _, connection in pairs(self.candidateConnections) do
+        if connection and type(connection.Disconnect) == "function" then
+            connection:Disconnect()
+        end
+    end
     table.clear(self.connections)
+    table.clear(self.candidateConnections)
     table.clear(self.candidates)
     table.clear(self.attemptedAt)
 end

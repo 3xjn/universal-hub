@@ -232,11 +232,29 @@ if not hasPersistedConfig then
         end
     end
 end
+local taskAutomationWasNormalized = configuration.TeleportBootstrap ~= true
+    and settings.taskAutomationEnabled == true
+if taskAutomationWasNormalized then
+    settings.taskAutomationEnabled = false
+end
 
 local session
 local overlay
 local adapter
 local store
+local pendingAdapterOptions = {}
+local function setAdapterOption(name, enabled, persist)
+    if session then
+        session:setOption(name, enabled, persist)
+        return true
+    end
+    table.insert(pendingAdapterOptions, {
+        name = name,
+        enabled = enabled,
+        persist = persist,
+    })
+    return false
+end
 local function noAfterAdapter(_adapter) end
 local composition = {
     adapter = {},
@@ -318,7 +336,7 @@ end
 local initialState = copyData(adapterDefinition.initialState)
 initialState.settings = settings
 initialState.status = ("Loading %s"):format(adapterDefinition.label)
-if settings.taskAutomationPaused == false then
+if settings.taskAutomationEnabled == true then
     initialState.menuVisible = false
 end
 store = Store.new(initialState)
@@ -643,6 +661,7 @@ local adapterContext = {
     placeId = game.PlaceId,
     players = Players,
     store = store,
+    setOption = setAdapterOption,
     teleportBootstrap = configuration.TeleportBootstrap == true,
     wait = task.wait,
     workspace = Workspace,
@@ -682,6 +701,13 @@ if not sessionCreated then
     failStartup(sessionResult)
 end
 session = sessionResult
+for _, request in ipairs(pendingAdapterOptions) do
+    session:setOption(request.name, request.enabled, request.persist)
+end
+table.clear(pendingAdapterOptions)
+if taskAutomationWasNormalized then
+    session:setOption("taskAutomationEnabled", false, true)
+end
 overlay.menu:setEnabled(true)
 table.clear(startupCleanups)
 local finalized, finalError = pcall(function()

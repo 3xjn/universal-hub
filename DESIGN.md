@@ -19,7 +19,7 @@ The menu keeps Universal Hub's generated-code and tooling identity while Limn pr
 ## Layout contract
 
 - 300 × 596 px collapsed panel, anchored 20 px from the upper-right viewport edge
-- The FOV row shows the current radius on the left and an explicit `Fullscreen On/Off` toggle on the right; full-screen mode disables the radius slider and hides the FOV circle without disabling Silent Aim
+- Aim Type is followed by a full-width `Radius` / `Fullscreen` / `360` Target Mode selector. The FOV row appears directly below it only in Radius mode; Fullscreen and 360 hide the radius circle without disabling aim.
 - Game name and live adapter status first
 - Equipped weapon and FOV are shared state for aim-capable adapters, not game tabs. Adapters without an aim capability omit both cards and the world-space FOV circle.
 - Compact two-column controls grouped by `RAGE`, `MELEE`, `MOVEMENT`, and `VISUALS`
