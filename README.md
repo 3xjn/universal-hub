@@ -18,4 +18,10 @@
 loadstring(game:HttpGet("https://3xjn.github.io/universal-hub/bootstrap.lua?v="..tick()))()
 ```
 
+Beta testing:
+
+```lua
+loadstring(game:HttpGet("https://3xjn.github.io/universal-hub/beta/bootstrap.lua?v="..tick()))()
+```
+
 Works with Volt and Potassium; press `Right Shift` to toggle the menu.
